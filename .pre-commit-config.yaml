@@ -1,0 +1,44 @@
+# Pre-commit hooks for CasePilot. Run automatically on staged files at commit time.
+# Ruff and ty run via `uv run` so their versions come from apps/api/pyproject.toml
+# (single source of truth) — never a second, drifting copy.
+#
+# First-time setup:  pre-commit install
+# Run manually:      pre-commit run --all-files
+minimum_pre_commit_version: "3.5.0"
+
+repos:
+  # ---- General hygiene (fast, language-agnostic) ----
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-added-large-files
+      - id: check-merge-conflict
+
+  # ---- Python: lint, import-sort, format, type-check (via uv) ----
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: ruff check (lint + import sort)
+        entry: uv run --project apps/api ruff check --fix
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
+
+      - id: ruff-format
+        name: ruff format
+        entry: uv run --project apps/api ruff format
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
+
+      - id: ty
+        name: ty (type check)
+        entry: bash -c 'cd apps/api && uv run ty check'
+        language: system
+        types: [python]
+        pass_filenames: false
+        require_serial: true
