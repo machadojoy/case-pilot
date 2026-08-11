@@ -18,3 +18,16 @@ dev = [
     "ruff>=0.16.2",
     "ty>=0.0.70",
 ]
+
+[tool.fastapi]
+entrypoint = "app.main:app"
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "F",    # pyflakes
+    "I",    # isort (import sorting)
+    "UP",   # pyupgrade (modern syntax)
+    "B",    # flake8-bugbear (likely bugs)
+    "FAST", # FastAPI-specific rules
+]
