@@ -4,6 +4,9 @@ version = "0.1.0"
 description = "CasePilot API — modular-monolith FastAPI backend"
 readme = "README.md"
 requires-python = ">=3.14"
+authors = [
+    { name = "machadojoy", email = "73057972+machadojoy@users.noreply.github.com" },
+]
 dependencies = [
     "alembic>=1.19.1",
     "fastapi[standard]>=0.141.1",
