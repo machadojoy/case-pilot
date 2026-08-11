@@ -51,6 +51,11 @@ uv run ty check           # type-check
 Docker / k8s workflows: see `README.md`. Local cluster name: `casepilot`.
 Container engine is **Colima** (`colima start`); local k8s is **k3d**.
 
+**Pre-commit hooks** (ruff check/format + ty + hygiene) run automatically on commit.
+After a fresh clone: `uv tool install pre-commit && pre-commit install`.
+Run manually anytime: `pre-commit run --all-files`. Config: `.pre-commit-config.yaml`;
+Ruff standards live in `apps/api/pyproject.toml` (`[tool.ruff.lint]`, isort via `I`).
+
 ## Definition of done for a step
 
 Code + a test where it makes sense; `ruff` and `ty` clean; verified it actually runs;
