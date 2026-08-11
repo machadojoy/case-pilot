@@ -1,0 +1,37 @@
+# ── Python ─────────────────────────────
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info/
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ── Node / frontend ────────────────────
+node_modules/
+apps/web/dist/
+*.local
+
+# ── Environment / secrets ──────────────
+.env
+.env.*
+!.env.example
+
+# ── Databases (SQLite dev DB) ──────────
+*.db
+*.sqlite
+*.sqlite3
+
+# ── Scratch / working notes (keep real docs tracked) ──
+*.scratch.md
+*.local.md
+notes/
+
+# ── OS / editor junk ───────────────────
+.DS_Store
+.idea/
+.vscode/
+*.swp
