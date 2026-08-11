@@ -1,0 +1,17 @@
+# A Service gives the (ephemeral, churning) set of Pods one stable virtual IP
+# and DNS name inside the cluster. Other workloads reach the API via this name
+# ("casepilot-api"), never via individual Pod IPs.
+apiVersion: v1
+kind: Service
+metadata:
+  name: casepilot-api
+  labels:
+    app: casepilot-api
+spec:
+  type: ClusterIP # in-cluster only; we reach it from the host via `kubectl port-forward`
+  selector:
+    app: casepilot-api # route to every Pod carrying this label (the Deployment's Pods)
+  ports:
+    - name: http
+      port: 80 # the port the Service listens on
+      targetPort: 8000 # the containerPort it forwards to

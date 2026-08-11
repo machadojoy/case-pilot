@@ -1,0 +1,54 @@
+# A Deployment manages a set of identical Pods (your app running in containers).
+# It keeps the desired number of replicas alive and handles rolling updates.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: casepilot-api
+  labels:
+    app: casepilot-api
+spec:
+  replicas: 2 # run 2 Pods -> load spreading + survives one Pod dying
+  selector:
+    matchLabels:
+      app: casepilot-api # this Deployment owns Pods with this label
+  template: # the Pod "blueprint" stamped out for each replica
+    metadata:
+      labels:
+        app: casepilot-api # must match the selector above
+    spec:
+      # Enforce at the cluster level what the image already does: never run as root.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+        - name: api
+          image: casepilot-api:0.1.0
+          # Use the image we imported into the cluster; do NOT try to pull it
+          # from a registry (there isn't one in local dev).
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+          # Resource requests = what the scheduler reserves; limits = hard ceiling.
+          # Good hygiene: without these, one Pod can starve the node.
+          resources:
+            requests:
+              cpu: "50m" # 0.05 of a CPU core
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+          # Readiness: is this Pod ready to receive traffic? If it fails, the
+          # Service stops routing to this Pod (but doesn't restart it).
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          # Liveness: is the process wedged? If it fails, kubelet restarts it.
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 15
