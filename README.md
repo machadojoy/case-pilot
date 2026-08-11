@@ -118,3 +118,7 @@ colima stop                     # stop the Docker VM
 | 4 | Router → specialist hand-off | Extract agents into its own service (gRPC) |
 | 5 | Stripe payments (test mode) | Eventual consistency, webhooks, idempotency |
 | 6 | Frontend polish + deploy | Solution architecture, observability |
+
+## License
+
+[MIT](./LICENSE) © machadojoy
