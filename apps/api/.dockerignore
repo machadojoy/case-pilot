@@ -1,0 +1,19 @@
+# Keep the build context small and the image clean.
+# The venv is rebuilt inside the image; never copy the host one (wrong paths/arch).
+.venv/
+__pycache__/
+*.py[oc]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# VCS / local junk
+.git/
+.gitignore
+.DS_Store
+
+# Dev-only files not needed at runtime
+Dockerfile
+.dockerignore
+README.md
+tests/

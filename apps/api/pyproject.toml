@@ -15,12 +15,18 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "pytest>=9.1.1",
     "ruff>=0.16.2",
     "ty>=0.0.70",
 ]
 
 [tool.fastapi]
 entrypoint = "app.main:app"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"
 
 [tool.ruff.lint]
 select = [
