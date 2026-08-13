@@ -9,6 +9,9 @@
 routes to a jurisdiction-specific specialist agent (work, housing, family…), which
 classifies the case type and prepares a dossier.
 
+> **⚠️ Deviation from this brief:** we use **PostgreSQL from day one** (docker compose),
+> not the SQLite suggested below — for dev/prod parity. See `CLAUDE.md` / `PROGRESS.md`.
+
 ---
 
 ## Phase 1 goal

@@ -54,6 +54,16 @@ brew install uv fnm colima docker docker-compose kubectl k3d
 
 ## Running the API (local dev)
 
+**1. Start the database** (PostgreSQL, via docker compose — from the repo root):
+
+```bash
+cp .env.example .env          # first time only (local dev credentials)
+docker compose up -d          # Postgres on localhost:5432
+docker compose ps             # confirm it's "healthy"
+```
+
+**2. Run the API** (from `apps/api/`):
+
 ```bash
 cd apps/api
 uv run fastapi dev            # http://localhost:8000  (docs at /docs)
@@ -61,6 +71,9 @@ curl localhost:8000/health    # -> {"status":"ok"}
 ```
 
 `uv` auto-creates the virtualenv and installs dependencies on first run.
+
+We use **PostgreSQL from the start** (not SQLite) for dev/prod parity. Stop the DB with
+`docker compose down` (keeps data) or `docker compose down -v` (wipes it).
 
 ### Tests, lint, types
 

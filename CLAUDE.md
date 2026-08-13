@@ -33,7 +33,10 @@ packages/     shared code, incl. future gRPC/proto contracts (Phase 4)
   extraction-ready for the Phase 4 microservice split.
 - **FastAPI:** use the `fastapi` skill for conventions (Annotated params/deps, return
   types / response_model, one HTTP op per function, router-level prefix/tags).
-- **DB:** SQLModel (not raw SQLAlchemy) + Alembic migrations, SQLite in dev.
+- **DB:** SQLModel (not raw SQLAlchemy) + Alembic migrations on **PostgreSQL**
+  (via `docker compose` locally — `postgres:17`). We deliberately do NOT use SQLite,
+  even though `PHASE1.md` suggests it — dev/prod parity from day one. Driver: psycopg 3
+  (`postgresql+psycopg://`). Connection config comes from the root `.env`.
 - **Auth:** PyJWT + `pwdlib[bcrypt]`. Do NOT use python-jose or passlib (unmaintained).
 - **Python:** managed by `uv`, pinned to 3.14. Add deps with `uv add` (runtime) /
   `uv add --dev` (tooling). Never hand-edit the venv.
@@ -42,6 +45,10 @@ packages/     shared code, incl. future gRPC/proto contracts (Phase 4)
 ## Commands (run from `apps/api/`)
 
 ```bash
+# From repo root: start the local database first
+docker compose up -d      # PostgreSQL on localhost:5432 (see compose.yaml)
+
+# From apps/api/:
 uv run fastapi dev        # dev server -> http://localhost:8000 (/docs)
 uv run pytest             # tests
 uv run ruff check .       # lint   (uv run ruff format . to format)
