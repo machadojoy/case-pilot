@@ -26,17 +26,24 @@ Known/minor (not blocking):
 - LICENSE is correctly detected as MIT via GitHub's REST API (the `gh repo view`
   GraphQL field just reports it lazily).
 
+## Design pivot (2026-08-13)
+
+We reframed the whole domain: **multi-tenant SaaS**, each law firm = an isolated
+**workspace** (tenant); global `User` identity + `Membership(role)`; customers self-serve
+intake; **AI agents** do triage (assess + auto-decide within firm policy, escalate edge
+cases — no human intake clerk). Captured in `DESIGN.md`; per-model docs in `docs/models/`.
+This **supersedes** PHASE1.md's flat data model (and its human-triage assumption).
+
 ## Next up (the very next step)
 
-Wire the app to the now-running Postgres, in this order, pausing after the migration:
-1. `uv add "psycopg[binary]"` — the Postgres driver (psycopg 3).
-2. `app/core/config.py` — pydantic-settings `Settings` reading the root `.env`
-   (`DATABASE_URL`, `postgresql+psycopg://...`).
-3. `app/core/db.py` — SQLModel engine (from `DATABASE_URL`) + a session dependency.
-   Smoke-test an actual connection (`SELECT 1`) against the compose Postgres.
-4. First model: `User` (id, email unique, hashed_password, full_name, created_at).
-5. Wire up Alembic and generate the **first migration**; `alembic upgrade head`.
-6. **Pause** so the human inspects the Postgres schema (`docker exec ... psql`).
+Finish designing then build the **tenant root first** — `Organization`, NOT `User`:
+1. Lock the `Organization` model (`docs/models/organization.md`) — slug? updated_at?
+2. Still-open architecture Qs to confirm (see DESIGN.md §10): RLS isolation, customer
+   portal Option 2, progressive identity, UUID vs int PK, role set, reference-data scope.
+3. Then the DB foundation: `uv add "psycopg[binary]"`, `core/config.py`, `core/db.py`
+   (engine + session, `SELECT 1` smoke-test).
+4. Build `Organization` model (TDD, on a `feat/` branch) → Alembic first migration.
+5. **Pause** so the human inspects the Postgres schema.
 
 ## Phase 1 checklist
 
