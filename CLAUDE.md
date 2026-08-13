@@ -14,6 +14,11 @@ Product + phase roadmap: see `PHASE1.md`.
   decisions before acting on them.
 - **Treat it as if it were production**, even though it's a weekend learning project.
 - Prefer **modern, lightweight, well-maintained** tooling; flag stale/deprecated libs.
+- **Plan before building, and grill the plan.** For anything non-trivial: produce a
+  short plan and get sign-off first. Actively challenge the approach, hunt for the
+  *simplest* design that works, and explicitly name what you'd cut or defer. Ask pointed
+  clarifying questions when the goal/constraints are ambiguous — never assume. Bias to
+  fewer moving parts; call out and justify any added complexity or scope creep.
 
 ## Repo layout (monorepo)
 
@@ -63,7 +68,22 @@ After a fresh clone: `uv tool install pre-commit && pre-commit install`.
 Run manually anytime: `pre-commit run --all-files`. Config: `.pre-commit-config.yaml`;
 Ruff standards live in `apps/api/pyproject.toml` (`[tool.ruff.lint]`, isort via `I`).
 
+## Git workflow (branch per feature)
+
+**Never commit straight to `main`.** For each feature/slice:
+
+1. Branch off main: `git switch -c feat/<slug>` (or `fix/`, `chore/`, `docs/`).
+2. Do the work in small, atomic commits on that branch; push it.
+3. Open a PR (`gh pr create`); let **CI go green**.
+4. Merge (`gh pr merge --squash --delete-branch`) and switch back to `main`.
+
+Keep branches short-lived and scoped to one slice. `main` stays always-green.
+
 ## Definition of done for a step
 
-Code + a test where it makes sense; `ruff` and `ty` clean; verified it actually runs;
-committed. Then update `PROGRESS.md` and pause.
+1. **Test-first (TDD).** Start with a failing test (red), make it pass (green),
+   then refactor. A step isn't done without a test covering it.
+2. `pytest` passes and **coverage** doesn't regress; `ruff` and `ty` clean.
+3. Verified it actually runs (not just that tests pass).
+4. Committed on a `feat/*` branch, PR opened, CI green, merged to `main`.
+5. `PROGRESS.md` updated. Then pause.
