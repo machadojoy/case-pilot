@@ -91,9 +91,12 @@ PHASE1's standalone `Lawyer` reference table is replaced: **lawyers are `User`s 
 1. ❓ Isolation: confirm shared-schema + `org_id` + **RLS**.
 2. ❓ Customer portal: confirm **Option 2** (global identity + workspace switcher).
 3. ❓ Identity: **progressive** (lead→activate) vs signup-first.
-4. ❓ Primary keys: **UUID** vs int (leaning UUID).
+4. ✅ Primary keys: **UUID everywhere** (decided 2026-08-13).
 5. ❓ Role set; is `customer` a `Membership` role or a distinct concept?
 6. ❓ `Jurisdiction`/`CaseType`: global vs per-firm.
+
+**Conventions (decided):** UUID PKs on all tables; `created_at` + `updated_at`
+(tz-aware) on all tables.
 
 ## 11. Entity map (high level)
 

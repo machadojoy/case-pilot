@@ -1,32 +1,35 @@
 # Model: Organization (the tenant / workspace)
 
-> Discussion doc — **not final**. See `../../DESIGN.md` for the big picture.
+> Status: **core locked (2026-08-13).** See `../../DESIGN.md` for the big picture.
 
 ## Purpose
 
 The **tenant root**. One row per law-firm workspace. Every tenant-scoped table carries its
 `org_id`. Created when a firm signs up; the first user becomes its `owner` (via `Membership`).
 
-## Proposed fields (minimal core)
+## Fields (decided)
 
 | Field | Type | Notes |
 |-------|------|-------|
-| `id` | UUID | PK (pending the UUID-vs-int lock in DESIGN.md) |
-| `name` | str | display name, e.g. "XYZ Family Law" |
-| `slug` | str | **unique**, URL/workspace identifier, e.g. `xyz-family-law` |
-| `created_at` | datetime (tz-aware) | server default `now()` |
-| `updated_at` | datetime (tz-aware) | optional; auto-updates on change |
+| `id` | UUID | PK. **UUID everywhere** — non-enumerable, URL-safe, avoids an int→UUID migration later. |
+| `name` | str | display name, e.g. "XYZ Family Law". Mutable. |
+| `slug` | str | **unique** URL/workspace handle, e.g. `xyz-family-law`. Auto-generated from `name` at creation; **stable** (renaming `name` does not change it). |
+| `created_at` | datetime (tz-aware) | server default `now()`. |
+| `updated_at` | datetime (tz-aware) | auto-updates on change. **Convention: both timestamps on every table.** |
 
 ## Deliberately NOT included yet (YAGNI)
 
-- `status` / suspended (soft-disable) — add with an actual suspension flow.
+- `status` / suspended — add with a real suspension flow.
 - `plan` / billing tier — Phase 5.
 - `settings` / triage policy — its own entity later.
 - `owner_id` — **derive** from `Membership(role=owner)`; don't duplicate identity here.
 
-## Open questions
+## Creation is transactional (behavior, not a field)
 
-1. **Slug** — include now? (Yes if we want per-workspace URLs / the switcher.)
-   Auto-generate from `name`? Enforce uniqueness + immutability?
-2. **`updated_at`** — adopt as a convention on all tables, or add only when needed?
-3. Anything a workspace genuinely needs *at creation* beyond `name` + `slug`?
+Signing up a firm creates — atomically — the `Organization` **+** the owner `User` **+** a
+`Membership(role=owner)`. All-or-nothing.
+
+## To resolve when we build
+
+- Slug generation: `slugify(name)` + a collision suffix if taken (e.g. `-2`).
+- Slug *changes* (rename) are a deliberate later feature (they break old links).
