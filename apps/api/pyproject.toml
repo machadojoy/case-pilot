@@ -10,6 +10,7 @@ authors = [
 dependencies = [
     "alembic>=1.19.1",
     "fastapi[standard]>=0.141.1",
+    "psycopg[binary]>=3.3.4",
     "pwdlib[bcrypt]>=0.3.0",
     "pydantic-settings>=2.15.0",
     "pyjwt>=2.13.0",
