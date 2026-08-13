@@ -17,6 +17,14 @@ Done and on `main` (public: github.com/machadojoy/case-pilot):
 - k8s Deployment (2 replicas) + Service — verified on the `casepilot` k3d cluster.
 - **PostgreSQL 17 via docker compose** (`compose.yaml`) — up, healthy, reachable on
   localhost:5432. Decision: Postgres from day one, NOT SQLite (dev/prod parity).
+- **CI green** on GitHub Actions (lint + test jobs); coverage 100% on the tiny codebase.
+
+Known/minor (not blocking):
+- CI shows a cosmetic "Node 20 deprecated" warning for `actions/checkout@v4` /
+  `setup-uv@v6` — nothing fails. Bump checkout to `@v5` when convenient.
+- `apps/api/README.md` is empty (0 bytes) but `pyproject` declares `readme=` — deferred.
+- LICENSE is correctly detected as MIT via GitHub's REST API (the `gh repo view`
+  GraphQL field just reports it lazily).
 
 ## Next up (the very next step)
 
@@ -34,6 +42,7 @@ Wire the app to the now-running Postgres, in this order, pausing after the migra
 
 - [x] Scaffolding: monorepo, uv, runnable API, Docker, k8s, tests, pre-commit
 - [x] Local PostgreSQL via docker compose (`compose.yaml`, verified healthy)
+- [x] CI (GitHub Actions: ruff lint + pytest, with a Postgres service) + coverage (pytest-cov)
 - [ ] psycopg driver + `core/config.py` (pydantic-settings, reads `.env`)
 - [ ] `core/db.py` (engine from DATABASE_URL + session dependency)
 - [ ] Alembic set up + first migration (against Postgres)
