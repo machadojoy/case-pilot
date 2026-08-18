@@ -28,6 +28,10 @@ jobs:
         run: uv run ruff check .
       - name: Ruff format check
         run: uv run ruff format --check .
+      # Mirrors the local pre-commit hook. `ty` exits 1 on warnings too, so this
+      # catches what would otherwise slip through a `git commit --no-verify`.
+      - name: Type check (ty)
+        run: uv run ty check
 
   test:
     runs-on: ubuntu-latest
