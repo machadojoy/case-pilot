@@ -5,9 +5,22 @@ Living status + handoff notes. Update this at the end of every session.
 
 ---
 
-## Current status — updated 2026-08-13
+## Current status — updated 2026-08-18
 
-**Phase:** 1 (skeleton + models + auth). **Scaffolding + DB infra done; app not yet wired to DB.**
+**Phase:** 1 (skeleton + models + auth). **DB layer live: Organization is migrated
+onto Postgres. Next model in the build order is `User`.**
+
+Done since 2026-08-13 (branch `feat/organization-model`):
+- `core/config.py` (pydantic-settings, `database_url` as `PostgresDsn` from root `.env`)
+  and `core/db.py` (engine + `get_session` + `SessionDep` alias).
+- `TimestampMixin` + **`Organization`** model (UUID PK, name, unique/indexed slug,
+  tz-aware timestamps with `now()` server defaults).
+- Test infra: dedicated `casepilot_test` DB (auto-created), per-test
+  transaction-rollback `session` fixture.
+- **Alembic** wired to Postgres + first migration (`6b6718274821`, creates
+  `organizations`). `env.py` takes the URL from app settings; `app/models.py` is the
+  model registry both autogenerate and the tests import.
+- Coverage back to **100%** (4 tests) after covering `get_session` / `SessionDep`.
 
 Done and on `main` (public: github.com/machadojoy/case-pilot):
 - Monorepo (`apps/` + `packages/`), single git repo, MIT license, README.
@@ -36,24 +49,37 @@ This **supersedes** PHASE1.md's flat data model (and its human-triage assumption
 
 ## Next up (the very next step)
 
-Finish designing then build the **tenant root first** — `Organization`, NOT `User`:
-1. Lock the `Organization` model (`docs/models/organization.md`) — slug? updated_at?
-2. Still-open architecture Qs to confirm (see DESIGN.md §10): RLS isolation, customer
-   portal Option 2, progressive identity, UUID vs int PK, role set, reference-data scope.
-3. Then the DB foundation: `uv add "psycopg[binary]"`, `core/config.py`, `core/db.py`
-   (engine + session, `SELECT 1` smoke-test).
-4. Build `Organization` model (TDD, on a `feat/` branch) → Alembic first migration.
-5. **Pause** so the human inspects the Postgres schema.
+`Organization` is done and migrated. Build order (DESIGN.md) says **`User` is next**,
+then `Membership`, then reference data, then `Dossier`.
+
+Before writing `User`, decide the DESIGN.md §10 questions it depends on:
+- Q3 progressive identity (lead→activate) vs signup-first — shapes whether `User`
+  can exist without a password/verified email.
+- Q5 the role set, and whether `customer` is a `Membership` role or its own concept —
+  shapes `Membership` right after.
+(Q1 RLS and Q6 reference-data scope can wait; Q4 UUID PKs is settled.)
+
+Then: design doc in `docs/models/user.md` → TDD the model on a `feat/user-model`
+branch → `alembic revision --autogenerate` → PR.
+
+Deferred, worth doing when convenient (small, independent):
+- **CI does not run `ty`** — the lint job runs ruff only, so type errors are caught
+  solely by the local pre-commit hook. Add a `uv run ty check` step.
+- Tests build their schema with `create_all`, *not* migrations, so a broken migration
+  would not fail CI. Consider switching the test schema to `alembic upgrade head`.
+- `starlette.testclient` warns that `httpx` is deprecated in favour of `httpx2`.
 
 ## Phase 1 checklist
 
 - [x] Scaffolding: monorepo, uv, runnable API, Docker, k8s, tests, pre-commit
 - [x] Local PostgreSQL via docker compose (`compose.yaml`, verified healthy)
 - [x] CI (GitHub Actions: ruff lint + pytest, with a Postgres service) + coverage (pytest-cov)
-- [ ] psycopg driver + `core/config.py` (pydantic-settings, reads `.env`)
-- [ ] `core/db.py` (engine from DATABASE_URL + session dependency)
-- [ ] Alembic set up + first migration (against Postgres)
-- [ ] Models: User, Jurisdiction, CaseType, Lawyer (M:N), Dossier
+- [x] psycopg driver + `core/config.py` (pydantic-settings, reads `.env`)
+- [x] `core/db.py` (engine from DATABASE_URL + session dependency)
+- [x] Alembic set up + first migration (against Postgres)
+- [x] Model: Organization (tenant root)
+- [ ] Models: User, Membership, Jurisdiction, CaseType, Dossier
+      (per DESIGN.md — supersedes PHASE1.md's flat model + the `Lawyer` M:N entity)
 - [ ] JWT auth: register / login / me (PyJWT + pwdlib)
 - [ ] Endpoints: jurisdictions, case-types, dossiers (create/list/get mine)
 - [ ] `seed.py` — jurisdictions (Work/Housing/Family), case types, lawyers
@@ -75,6 +101,16 @@ Finish designing then build the **tenant root first** — `Organization`, NOT `U
   (not localhost) — revisit when containerizing the app against Postgres.
 - The `docker compose` plugin was a stale 2021 v2.2.1; symlinked brew's 5.4.0 into
   `~/.docker/cli-plugins/` (same class of fix as the docker/kubectl CLI relinks).
+- **Alembic runs from `apps/api/`**: `uv run alembic revision --autogenerate -m "..."`
+  then `uv run alembic upgrade head`. `alembic check` tells you if the models have
+  drifted from the migrations. Requires the DB up (`docker compose up -d`).
+- **New models must be imported in `app/models.py`** or autogenerate silently emits an
+  empty migration. This is the single easiest way to lose an hour here.
+- `alembic.ini` has `post_write_hooks` running ruff over each generated revision, so
+  new migrations land pre-formatted. `script.py.mako` is customized (modern typing +
+  `import sqlmodel.sql.sqltypes`) — don't overwrite it by re-running `alembic init`.
+- `sqlalchemy.url` in `alembic.ini` is a dummy placeholder; `env.py` overrides it from
+  app settings at runtime. Editing the ini value has no effect.
 
 ## End-of-session ritual
 
