@@ -36,6 +36,9 @@ packages/     shared code, incl. future gRPC/proto contracts (Phase 4)
 - **Module shape:** each backend feature keeps `models.py / schemas.py / router.py /
   service.py` (+ `deps.py` where needed). This is deliberate — it keeps modules
   extraction-ready for the Phase 4 microservice split.
+- **Model registry:** every table model MUST be imported in `app/models.py`. Alembic
+  autogenerate (`alembic/env.py`) and the test schema (`tests/conftest.py`) rely on it —
+  a model missing from the registry is silently skipped by migrations.
 - **FastAPI:** use the `fastapi` skill for conventions (Annotated params/deps, return
   types / response_model, one HTTP op per function, router-level prefix/tags).
 - **DB:** SQLModel (not raw SQLAlchemy) + Alembic migrations on **PostgreSQL**

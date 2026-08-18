@@ -3,8 +3,8 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
 from sqlmodel import Session, SQLModel
 
+import app.models  # noqa: F401  (registers all models for create_all)
 from app.core.config import settings
-from app.organizations.models import Organization  # noqa: F401  (registers the table)
 
 # Tests run against a dedicated database (casepilot -> casepilot_test) so a test run
 # never touches your dev data. Same Postgres server, different database.
