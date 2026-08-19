@@ -10,7 +10,30 @@ Living status + handoff notes. Update this at the end of every session.
 **Phase:** 1 (skeleton + models + auth). **First vertical slice is closed: the API
 serves real requests against Postgres.** Next model in the build order is `User`.
 
+Current API surface:
+
+```
+GET  /health                        (unversioned — k8s probe, do not move)
+POST /api/v1/organizations          201
+GET  /api/v1/organizations          paginated: {items, total, offset, limit}
+GET  /api/v1/organizations/{id}     200 / 404
+```
+
 Done 2026-08-19 (all merged to `main`):
+- **API versioning**: `app/api/v1.py` owns the `/api/v1` prefix and aggregates feature
+  routers. Feature routers declare only their own prefix and stay version-agnostic, so
+  a v2 is a new aggregator, not an edit to every module. `/health` stays unversioned.
+- **`GET /api/v1/organizations`** — paginated via `Page[T]` + `PaginationDep` in
+  `app/core/pagination.py` (`offset>=0`, `1<=limit<=100`, default 20). Ordered by
+  `(created_at, id)`; the `id` tiebreaker is required because `created_at` defaults to
+  `now()` = *transaction* time, so rows written together tie and pages would repeat or
+  skip. `Page[T]` is a plain pydantic `BaseModel` (pure wire type; generics fight the
+  SQLModel metaclass). Borrowed from the `../fastapi-tutorial` project.
+- **Transaction boundary moved out of the service** — `create_organization` used to
+  commit, so a signup failing after it left an orphaned tenant (no owner, slug taken).
+  Services now stage only (`session.begin_nested()` + `flush()`, so a slug-collision
+  retry doesn't poison the caller's transaction); the router commits. This is what makes
+  the upcoming atomic signup (Organization + User + Membership) possible.
 - **`POST /organizations` + `GET /organizations/{id}`** — the first real endpoint, and
   the first place the `schemas.py / service.py / router.py` module shape exists in code
   rather than only in `CLAUDE.md`. Copy this module for the next feature.
@@ -67,14 +90,9 @@ This **supersedes** PHASE1.md's flat data model (and its human-triage assumption
 
 ## Next up (the very next step)
 
-Two options — pick one:
-
-**(a) `GET /organizations` (list).** Small, stays in the module you just built. Forces
-one decision: pagination style (limit/offset vs cursor). Do this if you want more
-FastAPI reps before adding entities.
-
-**(b) `User` model** — the build order's answer. `Membership` follows, then reference
-data, then `Dossier`. Use the `add-model` skill.
+**`User` model.** The list endpoint is done, so the build order's answer is the only
+one left: `User` → `Membership` → reference data → `Dossier`. Use the `add-model` skill
+(it now covers endpoints + the `/api/v1` contract too).
 
 Before writing `User`, decide the DESIGN.md §10 questions it depends on:
 - Q3 progressive identity (lead→activate) vs signup-first — shapes whether `User`
@@ -105,7 +123,7 @@ Deferred, worth doing when convenient (small, independent):
 - [x] Model: Organization (tenant root)
 - [ ] Models: User, Membership, Jurisdiction, CaseType, Dossier
       (per DESIGN.md — supersedes PHASE1.md's flat model + the `Lawyer` M:N entity)
-- [x] Endpoints: organizations (create + get by id)
+- [x] Endpoints: organizations (create + list + get by id), under `/api/v1`
 - [ ] JWT auth: register / login / me (PyJWT + pwdlib)
 - [ ] Endpoints: jurisdictions, case-types, dossiers (create/list/get mine)
 - [ ] `seed.py` — jurisdictions (Work/Housing/Family), case types, lawyers
@@ -121,6 +139,16 @@ Deferred, worth doing when convenient (small, independent):
     annotation. A bare return annotation would make `ty` reject returning the ORM object.
   - Business logic lives in `service.py`; the router only translates errors to HTTP.
   - Uniqueness: insert and catch `IntegrityError`. Never SELECT-then-INSERT — it races.
+  - **Services never commit.** The router owns the transaction boundary so multi-entity
+    operations stay atomic. In a service, use `session.begin_nested()` + `flush()` to
+    catch an `IntegrityError` without poisoning the caller's transaction.
+  - Feature routers carry only their own prefix; `app/api/v1.py` owns `/api/v1`. Add a
+    new feature by adding one `include_router` line there.
+  - Listing: reuse `Page[T]` / `PaginationDep` from `app/core/pagination.py`, and always
+    order by a column **plus `id`** — `created_at` alone ties (`now()` is transaction
+    time), which makes pages repeat or skip rows.
+  - `col()` from sqlmodel when passing model attributes to `order_by` — SQLModel types
+    them as their value type, so `ty` rejects them as sort keys otherwise.
 - `tests/conftest.py` imports the FastAPI app **aliased** (`app as fastapi_app`) because
   the bare name `app` is the package. Don't "simplify" that back.
 - Local infra must be running for Docker/k8s work: `colima start`, then

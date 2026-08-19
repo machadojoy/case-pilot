@@ -130,11 +130,32 @@ docker compose exec postgres psql -U casepilot -d casepilot -c '\d things'
 uv run ruff check . && uv run ruff format --check . && uv run ty check && uv run pytest
 ```
 
-Coverage must not regress. Note `ty` **exits 1 on warnings**, and CI does not yet run
-it — the pre-commit hook is the only gate, so don't bypass it with `--no-verify`.
+Coverage must not regress. Note `ty` **exits 1 on warnings**, not just errors — CI runs
+it in the lint job, and so does the pre-commit hook.
 
 Then: commit in small atomic steps → `gh pr create` → CI green →
 `gh pr merge --squash --delete-branch` → update `PROGRESS.md` → **pause**.
+
+## 9. If the model gets endpoints
+
+A model is a separate slice from its API — ship the table first, then the routes.
+When you do add them, follow `app/organizations/` and mind the URL contract:
+
+- Feature routers declare **only their own prefix** (`APIRouter(prefix="/things")`) and
+  stay version-agnostic. Mount them by adding one `include_router` line to
+  `app/api/v1.py`, which owns the `/api/v1` prefix. Never put the version in a feature
+  router — that's what makes a future v2 a new aggregator instead of a mass edit.
+- `/health` is the exception: unversioned, because k8s and the Dockerfile point at it.
+- Path operations are `def`, **not `async def`** — psycopg is synchronous, so they run
+  in a threadpool. `async def` around a blocking query stalls the event loop.
+- `response_model=XPublic` on the decorator, with the *table* model as the return
+  annotation. A bare return annotation makes `ty` reject returning the ORM object.
+- Business logic goes in `service.py`; routers only translate errors to HTTP.
+- **Services must not commit.** The router owns the transaction boundary, so multi-entity
+  operations stay atomic. Inside a service, use `session.begin_nested()` + `flush()` when
+  you need to catch an `IntegrityError` without poisoning the caller's transaction.
+- Listing? Reuse `Page[T]` and `PaginationDep` from `app/core/pagination.py`, and order
+  by a column plus `id` — `created_at` alone ties, because `now()` is transaction time.
 
 ## Gotchas worth remembering
 
