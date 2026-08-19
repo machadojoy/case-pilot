@@ -1,8 +1,10 @@
 import uuid
+from collections.abc import Sequence
 
 from slugify import slugify
+from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
-from sqlmodel import Session
+from sqlmodel import Session, col, select
 
 from app.organizations.models import Organization
 from app.organizations.schemas import OrganizationCreate
@@ -53,3 +55,25 @@ def get_organization(
 ) -> Organization | None:
     """Fetch one firm by id, or None if it doesn't exist."""
     return session.get(Organization, organization_id)
+
+
+def list_organizations(
+    session: Session, *, offset: int, limit: int
+) -> tuple[Sequence[Organization], int]:
+    """One page of firms, plus the total row count.
+
+    Ordered by `(created_at, id)`. The `id` tiebreaker is not decorative:
+    `created_at` defaults to `now()`, which in Postgres is *transaction* time, so
+    rows written in the same transaction share it exactly. Without a tiebreaker
+    the sort would be non-deterministic and pages could repeat or skip rows.
+    """
+    total = session.exec(select(func.count()).select_from(Organization)).one()
+    items = session.exec(
+        select(Organization)
+        # col() tells the type checker these are columns, not the plain
+        # `datetime | None` / `UUID` values the class-level annotations suggest.
+        .order_by(col(Organization.created_at), col(Organization.id))
+        .offset(offset)
+        .limit(limit)
+    ).all()
+    return items, total

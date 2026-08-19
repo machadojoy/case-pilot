@@ -3,6 +3,7 @@ import uuid
 from fastapi import APIRouter, HTTPException, status
 
 from app.core.db import SessionDep
+from app.core.pagination import Page, PaginationDep
 from app.organizations import service
 from app.organizations.models import Organization
 from app.organizations.schemas import OrganizationCreate, OrganizationPublic
@@ -29,6 +30,22 @@ def create_organization(data: OrganizationCreate, session: SessionDep) -> Organi
     session.commit()
     session.refresh(organization)  # load DB-side defaults (timestamps) for the response
     return organization
+
+
+@router.get("")
+def list_organizations(
+    session: SessionDep, pagination: PaginationDep
+) -> Page[OrganizationPublic]:
+    """List firms, newest-registered last."""
+    organizations, total = service.list_organizations(
+        session, offset=pagination.offset, limit=pagination.limit
+    )
+    return Page(
+        items=[OrganizationPublic.model_validate(org) for org in organizations],
+        total=total,
+        offset=pagination.offset,
+        limit=pagination.limit,
+    )
 
 
 @router.get("/{organization_id}", response_model=OrganizationPublic)
