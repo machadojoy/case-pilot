@@ -17,12 +17,18 @@ router = APIRouter(prefix="/organizations", tags=["organizations"])
 def create_organization(data: OrganizationCreate, session: SessionDep) -> Organization:
     """Register a new law firm (tenant)."""
     try:
-        return service.create_organization(session, data)
+        organization = service.create_organization(session, data)
     except service.SlugUnavailableError:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Could not derive a free slug for that name.",
         ) from None
+    # The router owns the transaction boundary; services only stage their work.
+    # When signup grows to Organization + User + Membership, they all land here
+    # under one commit.
+    session.commit()
+    session.refresh(organization)  # load DB-side defaults (timestamps) for the response
+    return organization
 
 
 @router.get("/{organization_id}", response_model=OrganizationPublic)

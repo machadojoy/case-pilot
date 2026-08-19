@@ -24,19 +24,25 @@ def create_organization(session: Session, data: OrganizationCreate) -> Organizat
     We insert and catch the unique-violation rather than SELECTing first: two
     concurrent requests can both see a slug as free, so a pre-check would still
     let a duplicate through. The database's unique index is the only real arbiter.
+
+    **This function does not commit.** The caller owns the transaction, so that
+    multi-entity operations stay atomic — signing up a firm has to create the
+    Organization, the owner User and the Membership all-or-nothing (DESIGN.md).
+    Committing here would leave an orphaned tenant behind if a later step failed.
     """
     base_slug = slugify(data.name)
 
     for attempt in range(1, MAX_SLUG_ATTEMPTS + 1):
         slug = base_slug if attempt == 1 else f"{base_slug}-{attempt}"
         organization = Organization(name=data.name, slug=slug)
-        session.add(organization)
         try:
-            session.commit()
+            # SAVEPOINT: a unique violation here must roll back only this INSERT.
+            # A bare flush + rollback would discard the caller's other work too.
+            with session.begin_nested():
+                session.add(organization)
+                session.flush()  # hits the unique index without committing
         except IntegrityError:
-            session.rollback()
             continue
-        session.refresh(organization)
         return organization
 
     raise SlugUnavailableError(base_slug)
