@@ -5,12 +5,30 @@ Living status + handoff notes. Update this at the end of every session.
 
 ---
 
-## Current status — updated 2026-08-18
+## Current status — updated 2026-08-19
 
-**Phase:** 1 (skeleton + models + auth). **DB layer live: Organization is migrated
-onto Postgres. Next model in the build order is `User`.**
+**Phase:** 1 (skeleton + models + auth). **First vertical slice is closed: the API
+serves real requests against Postgres.** Next model in the build order is `User`.
 
-Done since 2026-08-13 (branch `feat/organization-model`):
+Done 2026-08-19 (all merged to `main`):
+- **`POST /organizations` + `GET /organizations/{id}`** — the first real endpoint, and
+  the first place the `schemas.py / service.py / router.py` module shape exists in code
+  rather than only in `CLAUDE.md`. Copy this module for the next feature.
+  - Slug derived server-side (`python-slugify`), never client-supplied; collisions
+    suffix (`acme-legal-2`). The service **inserts and catches the unique violation**
+    instead of SELECTing first — a pre-check races; the unique index is the only
+    arbiter. Bounded retry, then 409.
+  - Endpoints are `def`, **not `async def`** (psycopg is sync → threadpool). Keep this
+    for every DB-touching path operation.
+  - `name` bounded 1..200 at the API layer.
+  - New `client` fixture overrides `get_session` with the test's rolled-back session so
+    API tests stay isolated.
+- **`ty` now runs in CI** (lint job) — was previously caught only by pre-commit.
+- **`add-model` skill** (`.claude/skills/add-model/`) — the repeatable slice for adding
+  a table. Use it for `User`.
+- 12 tests, **100% coverage**. Verified against the running server + Postgres.
+
+Done 2026-08-18 (branch `feat/organization-model`):
 - `core/config.py` (pydantic-settings, `database_url` as `PostgresDsn` from root `.env`)
   and `core/db.py` (engine + `get_session` + `SessionDep` alias).
 - `TimestampMixin` + **`Organization`** model (UUID PK, name, unique/indexed slug,
@@ -49,8 +67,14 @@ This **supersedes** PHASE1.md's flat data model (and its human-triage assumption
 
 ## Next up (the very next step)
 
-`Organization` is done and migrated. Build order (DESIGN.md) says **`User` is next**,
-then `Membership`, then reference data, then `Dossier`.
+Two options — pick one:
+
+**(a) `GET /organizations` (list).** Small, stays in the module you just built. Forces
+one decision: pagination style (limit/offset vs cursor). Do this if you want more
+FastAPI reps before adding entities.
+
+**(b) `User` model** — the build order's answer. `Membership` follows, then reference
+data, then `Dossier`. Use the `add-model` skill.
 
 Before writing `User`, decide the DESIGN.md §10 questions it depends on:
 - Q3 progressive identity (lead→activate) vs signup-first — shapes whether `User`
@@ -63,23 +87,25 @@ Then: design doc in `docs/models/user.md` → TDD the model on a `feat/user-mode
 branch → `alembic revision --autogenerate` → PR.
 
 Deferred, worth doing when convenient (small, independent):
-- **CI does not run `ty`** — the lint job runs ruff only, so type errors are caught
-  solely by the local pre-commit hook. Add a `uv run ty check` step.
 - Tests build their schema with `create_all`, *not* migrations, so a broken migration
   would not fail CI. Consider switching the test schema to `alembic upgrade head`.
 - `starlette.testclient` warns that `httpx` is deprecated in favour of `httpx2`.
+- No auth on `POST /organizations` — anyone can create a tenant. Intentional: gating it
+  needs `User` + `Membership`. Revisit when auth lands; it's an additive dependency on
+  the route, not a reshape.
 
 ## Phase 1 checklist
 
 - [x] Scaffolding: monorepo, uv, runnable API, Docker, k8s, tests, pre-commit
 - [x] Local PostgreSQL via docker compose (`compose.yaml`, verified healthy)
-- [x] CI (GitHub Actions: ruff lint + pytest, with a Postgres service) + coverage (pytest-cov)
+- [x] CI (GitHub Actions: ruff lint + `ty` + pytest, with a Postgres service) + coverage
 - [x] psycopg driver + `core/config.py` (pydantic-settings, reads `.env`)
 - [x] `core/db.py` (engine from DATABASE_URL + session dependency)
 - [x] Alembic set up + first migration (against Postgres)
 - [x] Model: Organization (tenant root)
 - [ ] Models: User, Membership, Jurisdiction, CaseType, Dossier
       (per DESIGN.md — supersedes PHASE1.md's flat model + the `Lawyer` M:N entity)
+- [x] Endpoints: organizations (create + get by id)
 - [ ] JWT auth: register / login / me (PyJWT + pwdlib)
 - [ ] Endpoints: jurisdictions, case-types, dossiers (create/list/get mine)
 - [ ] `seed.py` — jurisdictions (Work/Housing/Family), case types, lawyers
@@ -88,6 +114,15 @@ Deferred, worth doing when convenient (small, independent):
 
 ## Handoff notes / gotchas
 
+- **Endpoint conventions** (set by `app/organizations/`, copy them):
+  - Path operations are `def`, **never `async def`** — psycopg/SQLModel are sync, so
+    they run in a threadpool. `async def` here blocks the event loop.
+  - Use `response_model=XPublic` on the decorator with the *table* model as the return
+    annotation. A bare return annotation would make `ty` reject returning the ORM object.
+  - Business logic lives in `service.py`; the router only translates errors to HTTP.
+  - Uniqueness: insert and catch `IntegrityError`. Never SELECT-then-INSERT — it races.
+- `tests/conftest.py` imports the FastAPI app **aliased** (`app as fastapi_app`) because
+  the bare name `app` is the package. Don't "simplify" that back.
 - Local infra must be running for Docker/k8s work: `colima start`, then
   `k3d cluster start casepilot`. Locally-built images need
   `k3d image import <img> -c casepilot` (k3d's containerd is isolated from Colima).
