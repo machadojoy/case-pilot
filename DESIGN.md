@@ -22,6 +22,32 @@ firm-configured policy — auto-accept/decline or escalate edge cases to a human
 - **Two planes:** *identity plane (global)* = `User`; *data plane (per-tenant)* =
   everything else, carrying `org_id`.
 
+## 2a. Data protection: who controls what
+
+CasePilot and its firms are **different data controllers**, and this is structural, not
+paperwork. ✅ (2026-08-21)
+
+| Plane | Controller | Erasure on request? |
+|-------|-----------|---------------------|
+| identity (`User`) | **CasePilot** | yes — anonymise in place, see `docs/models/user.md` |
+| data (`Dossier`, attested profile) | **each firm, independently** | often **must be refused** — GDPR Art 17(3)(b), retention for legal claims |
+
+Consequences that shape the schema:
+
+- **Erasing a `User` does not erase the person.** The account is anonymised; each firm's
+  case file is governed by that firm's own retention obligation. A subject access or
+  erasure request fans out to CasePilot *and* to every firm separately.
+- **No `ON DELETE CASCADE` from `users` to tenant data** — ever. An identity-plane
+  erasure must not be able to destroy a firm's legal records.
+- **Attested personal details are per-firm** — for privacy (§4) *and* because retention
+  periods differ per firm, so a global profile row would have no single lawful lifetime.
+- **Special-category data is effectively unavoidable.** Housing, family and employment
+  matters routinely contain health, ethnicity or criminal-offence data — GDPR **Art 9**,
+  a stricter regime than ordinary PII. The applicable condition is Art 9(2)(f), legal
+  claims. Note this bites *before* anyone has an account: an anonymous intake transcript
+  may already be Art 9 data, which turns the retention TTL on unclaimed sessions from
+  housekeeping into an obligation.
+
 ## 3. Identity & membership
 
 - **`User`** — global identity/account; email **globally unique**. Never org-scoped:
@@ -114,6 +140,8 @@ Discover (firm's intake) → Tell story + email (lead)
      activation must be "prove you control the mailbox, *then* set a password", never
      "set a password on the existing row".
   3. **On verification, invalidate everything predating the claim** (sessions, tokens).
+     Stateless JWT has nothing to invalidate, so this needs a mechanism:
+     `User.sessions_valid_from`, rejecting any token whose `iat` is older.
      This is the pre-hijacking mitigation (Sudhodanan & Paverd, USENIX Sec '22): the
      nasty variant is a squatter's session surviving the victim's later signup.
   4. Unclaimed anonymous sessions get a **retention TTL** — a transcript is personal
@@ -154,6 +182,13 @@ PHASE1's standalone `Lawyer` reference table is replaced: **lawyers are `User`s 
 - ⏳ Engagement + Payment/billing (Phase 5, Stripe). Conditional: retainer vs contingency.
 - ⏳ Agent Assessment/Decision records + per-firm TriagePolicy (Phases 2–4).
 - ⏳ Role profiles (LawyerProfile/StaffProfile), branded subdomains, chat/messages (P3).
+- ⏳ **Profile is two things**, and collapsing them is expensive to undo: a *self-asserted*
+  global copy the person maintains (prefill only, never authoritative) and a *per-firm
+  attested* snapshot with a reviewer and a date. The firm's record must not be a pointer
+  to a mutable global field, or its record of the facts *at time of filing* changes when
+  she moves house. Detail in `docs/models/user.md`; build with `Dossier`.
+- ⏳ Anonymous chat sessions (`user_id NULL`) + transcript back-fill on identify, with a
+  retention TTL. Constrained by Art 9 (§2a) before it is built.
 
 ## 10. Open questions to lock
 
