@@ -5,7 +5,7 @@ Living status + handoff notes. Update this at the end of every session.
 
 ---
 
-## Current status — updated 2026-08-19
+## Current status — updated 2026-08-21
 
 **Phase:** 1 (skeleton + models + auth). **First vertical slice is closed: the API
 serves real requests against Postgres.** Next model in the build order is `User`.
@@ -18,6 +18,23 @@ POST /api/v1/organizations          201
 GET  /api/v1/organizations          paginated: {items, total, offset, limit}
 GET  /api/v1/organizations/{id}     200 / 404
 ```
+
+Done 2026-08-21 (design only — no code; all merged to `main`):
+- **DESIGN.md §10 Q3 and Q5 locked.** Q3: progressive identity in *three* states —
+  anonymous (no `User` row at all), lead (`pending`), activated (`active`). Email capture
+  is what mints a `User`; anonymous chat is a session with `user_id NULL`. Q5: roles are
+  `owner`/`admin`/`lawyer`/`staff`, and **`customer` is not a role** — that relationship is
+  carried by `Dossier.customer_user_id`. Insider vs outsider are different *authorization
+  shapes*, not permission levels, and a firm's own employee can be its client (which two
+  `Membership` rows can't express without breaking the `(user, org)` key).
+- **DESIGN.md §2a — CasePilot and each firm are separate data controllers.** Erasing a
+  `User` does not erase the person; **never** `ON DELETE CASCADE` from `users` to tenant
+  data; Art 9 special-category data is unavoidable in this domain, which makes the
+  retention TTL on anonymous transcripts an obligation rather than housekeeping.
+- **`docs/models/user.md`** — the full design. Also records why *profile* is absent:
+  self-asserted (global, mutable, prefill-only) and attested (per-firm snapshot with a
+  reviewer and date) are different things, and a firm's record of the facts at time of
+  filing must not change when the person moves house. Build it with `Dossier`.
 
 Done 2026-08-19 (all merged to `main`):
 - **API versioning**: `app/api/v1.py` owns the `/api/v1` prefix and aggregates feature
@@ -90,19 +107,40 @@ This **supersedes** PHASE1.md's flat data model (and its human-triage assumption
 
 ## Next up (the very next step)
 
-**`User` model.** The list endpoint is done, so the build order's answer is the only
-one left: `User` → `Membership` → reference data → `Dossier`. Use the `add-model` skill
-(it now covers endpoints + the `/api/v1` contract too).
+**`User` model — build it.** Every decision it depends on is now made and written down;
+this slice is pure TDD. Read `docs/models/user.md` first (nine columns, reasoning per
+field), then use the `add-model` skill.
 
-Before writing `User`, decide the DESIGN.md §10 questions it depends on:
-- Q3 progressive identity (lead→activate) vs signup-first — shapes whether `User`
-  can exist without a password/verified email.
-- Q5 the role set, and whether `customer` is a `Membership` role or its own concept —
-  shapes `Membership` right after.
-(Q1 RLS and Q6 reference-data scope can wait; Q4 UUID PKs is settled.)
+Shape, so you don't have to re-derive it:
 
-Then: design doc in `docs/models/user.md` → TDD the model on a `feat/user-model`
-branch → `alembic revision --autogenerate` → PR.
+```
+id  email(unique, lowercased)  hashed_password?  full_name?
+status(str + CHECK: pending|active)  email_verified_at?
+sessions_valid_from?  erased_at?  created_at  updated_at
+```
+
+Three things in there are non-obvious and each has a section in the design doc:
+- **`status` is a `str` + CHECK constraint, not a PG enum** — no `ALTER TYPE ... DROP
+  VALUE` exists, and `unverified`/`closed` are both expected. Note `table=True` disables
+  Pydantic validation, so the CHECK is the *only* enforcement. Generate it from the
+  `StrEnum` so there's one source of truth. **Alembic autogenerate does not detect CHECK
+  constraint changes** — write that part by hand.
+- **`sessions_valid_from`** exists because DESIGN.md §5 requires invalidating sessions on
+  verification and stateless JWT has nothing to invalidate.
+- **`erased_at`, not soft delete** — a hidden row still holds the email (blocking
+  re-registration via the unique index), the name, and a live password hash.
+
+Then: `alembic revision --autogenerate` → hand-write the CHECK → PR.
+
+**Scope: the table only.** No endpoints, no auth, no password hashing, no
+register/login/me — those are the next slice and depend on `Membership`. The columns
+that exist *for* auth (`hashed_password`, `sessions_valid_from`, `email_verified_at`)
+are nullable and stay unused for now; they're here because retrofitting them later is
+more expensive than carrying them. Don't build a `service.py` or `router.py` for this
+slice — there's nothing for them to do yet.
+
+**Needs the DB up:** `colima start` → `docker compose up -d` (Colima was down at the end
+of this session, so pytest fails locally until you do).
 
 Deferred, worth doing when convenient (small, independent):
 - Tests build their schema with `create_all`, *not* migrations, so a broken migration
@@ -122,6 +160,7 @@ Deferred, worth doing when convenient (small, independent):
 - [x] Alembic set up + first migration (against Postgres)
 - [x] Model: Organization (tenant root)
 - [ ] Models: User, Membership, Jurisdiction, CaseType, Dossier
+      (`User` is designed and unblocked — `docs/models/user.md`)
       (per DESIGN.md — supersedes PHASE1.md's flat model + the `Lawyer` M:N entity)
 - [x] Endpoints: organizations (create + list + get by id), under `/api/v1`
 - [ ] JWT auth: register / login / me (PyJWT + pwdlib)
