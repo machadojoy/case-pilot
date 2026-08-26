@@ -1,7 +1,13 @@
 # CasePilot — Domain & System Design
 
-Living design doc capturing the architecture we've reasoned through. Per-model detail lives
-in `docs/models/`. **Supersedes the data-model sketch in `PHASE1.md`** where they differ.
+Living design doc: **what** we're building and **why**. Per-model and per-slice detail
+lives in `docs/models/` (`organization.md`, `user.md`) and `docs/auth.md`.
+**Supersedes `PHASE1.md`** — its data model, endpoint list and library choices — where
+they differ.
+
+**For current status and the next step, see `PROGRESS.md`** (the entry point); it also
+carries an at-a-glance table of which §10 questions are still open. Conventions and
+workflow live in `CLAUDE.md`.
 
 Status legend: ✅ decided · 🔷 proposed (recommended, not yet locked) · ⏳ deferred seam
 (later phase) · ❓ open question
@@ -232,7 +238,9 @@ PHASE1's standalone `Lawyer` reference table is replaced: **lawyers are `User`s 
 ## 10. Open questions to lock
 
 1. ❓ Isolation: confirm shared-schema + `org_id` + **RLS**.
-2. ❓ Customer portal: confirm **Option 2** (global identity + workspace switcher).
+2. 🔷 Customer portal: **Option 2** (global identity + workspace switcher). Not formally
+   locked, but §3's union query and §4 both assume it, and Q3/Q5 were decided on top of
+   it. Confirm or challenge — it is load-bearing either way.
 3. ✅ Identity: **progressive**, in three states — anonymous (no `User`) → lead
    (`pending`) → activated (`active`). Decided 2026-08-20; see §5.
 4. ✅ Primary keys: **UUID everywhere** (decided 2026-08-13).

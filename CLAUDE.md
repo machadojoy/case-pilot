@@ -1,10 +1,24 @@
 # CasePilot — agent guide
 
 Self-study full-stack project for learning FastAPI, React+TS, gRPC, and system design.
-Product + phase roadmap: see `PHASE1.md`.
 
-> **Read `PROGRESS.md` first** — it holds the current status, the next concrete step,
-> and handoff notes. This file (`CLAUDE.md`) holds only the stable rules/conventions.
+> **Start at `PROGRESS.md`** — current status, the next concrete step, handoff notes.
+> Then read **`DESIGN.md`** for *what* we're building and why. This file (`CLAUDE.md`)
+> holds only the stable rules/conventions.
+
+## Docs map — read in this order
+
+| Doc | Answers | Authority |
+|-----|---------|-----------|
+| `PROGRESS.md` | Where are we, what's next, what will bite me? | **entry point** — current |
+| `DESIGN.md` | What are we building and why? Domain, tenancy, identity. | **source of truth** for the domain |
+| `docs/models/*.md`, `docs/auth.md` | Per-slice detail: every field and endpoint, with reasoning | current |
+| `CLAUDE.md` (this file) | How we work — conventions, workflow, commands | current |
+| `PHASE1.md` | The original brief | **historical** — superseded by `DESIGN.md` |
+
+⚠️ **`PHASE1.md` is not the plan.** The domain was reframed on 2026-08-13 (multi-tenant
+SaaS, global identity + `Membership`, AI triage) and `DESIGN.md` supersedes its data model,
+endpoint list and library choices. Treat `PHASE1.md` as background, never as a spec.
 
 ## How the human wants to work
 
