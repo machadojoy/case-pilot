@@ -23,6 +23,7 @@ erDiagram
         text email UK "unique per firm: (org_id, lower(email))"
         text hashed_password "NULL for leads"
         text full_name "display only, unverified"
+        text role "CHECK: owner|admin|lawyer|staff - NULL = client"
         text status "CHECK: pending|unverified|active"
         timestamptz email_verified_at
         timestamptz sessions_valid_from "JWT iat cutoff"
@@ -31,18 +32,10 @@ erDiagram
         timestamptz updated_at
     }
 
-    MEMBERSHIPS {
-        uuid id PK
-        uuid user_id FK "unique - org comes from the user"
-        text role "CHECK: owner|admin|lawyer|staff"
-        timestamptz created_at
-        timestamptz updated_at
-    }
-
     DOSSIERS {
         uuid id PK
         uuid org_id FK "the tenant that owns this case"
-        uuid customer_user_id FK "the client - NOT a membership"
+        uuid customer_user_id FK "the client - a user with role NULL"
         uuid case_type_id FK
         text title
         text story
@@ -65,7 +58,6 @@ erDiagram
     }
 
     ORGANIZATIONS ||--o{ USERS       : "owns every account"
-    USERS         ||--o| MEMBERSHIPS : "insider grant (absent = client)"
     ORGANIZATIONS ||--o{ DOSSIERS    : "owns the case file"
     USERS         ||--o{ DOSSIERS    : "is the client on"
     JURISDICTIONS ||--o{ CASE_TYPES  : "groups"
@@ -77,10 +69,9 @@ erDiagram
 | Table | State |
 |-------|-------|
 | `organizations` | ✅ shipped — 3 endpoints under `/api/v1` |
-| `users` | ✅ shipped — no endpoints yet (auth slice is spec'd, see `auth.md`) |
-| `memberships` | ⏳ designed (`models/membership.md`), not built — next after auth |
+| `users` | ✅ shipped — but **predates Q2**: needs `org_id`, `role`, and a composite unique on `(org_id, lower(email))`. No endpoints yet; see `auth.md`. |
 | `jurisdictions` / `case_types` | ❌ blocked on DESIGN.md §10 **Q6** (global taxonomy vs per-firm) |
-| `dossiers` | ❌ blocked on `memberships` + reference data |
+| `dossiers` | ❌ blocked on reference data |
 
 ## The one thing to read the diagram for
 
@@ -89,12 +80,12 @@ shapes** — not different permission levels (DESIGN.md §3):
 
 | Who | Marked by | Scope predicate |
 |-----|-----------|-----------------|
-| **insider** — staff, lawyers | a `MEMBERSHIPS` row | `WHERE org_id = :org` — the firm's whole book of business |
-| **outsider** — a client | **no** membership row | `WHERE org_id = :org AND customer_user_id = :me` — their own case only |
+| **insider** — staff, lawyers | `role IS NOT NULL` | `WHERE org_id = :org` — the firm's whole book of business |
+| **outsider** — a client | `role IS NULL` | `WHERE org_id = :org AND customer_user_id = :me` — their own case only |
 
 No role check can express that second predicate, which is why `customer` is **not** a role.
-The same person can be a `lawyer` at a firm *and* a client of it — one membership, one
-dossier, no conflict.
+The same person can be a `lawyer` at a firm *and* a client of it — `role = 'lawyer'` plus a
+dossier where they are the customer. As a role *value* that would be unrepresentable.
 
 Since Q2 (per-firm accounts) the same human at two firms is **two unrelated `USERS` rows**.
 Nothing links them, which is what keeps CasePilot a pure processor.
@@ -116,7 +107,7 @@ Nothing links them, which is what keeps CasePilot a pure processor.
 | Row | On "delete" |
 |-----|-------------|
 | `users` | **never deleted.** Erasure anonymises in place (`erased_at`); the row survives as an FK anchor for case files. |
-| `memberships` | **hard `DELETE`.** An access grant, not a record. A tombstone would occupy the `user_id` unique slot and block re-adding someone who left. |
+| staff access | **revocation closes the account** (`status = 'closed'`), not just `role = NULL` — a nulled role leaves a former employee indistinguishable from a client, with a live login. Exception: if they are *also* a client, null the role and keep the account. |
 | `organizations` | **no `DELETE` endpoint at all.** Deleting a tenant would destroy `dossiers` the firm is legally obliged to keep. The real operation is *closure* — lifecycle, a future `status` value. |
 | `dossiers` | legal records; retention is the firm's obligation (§2a). |
 
@@ -132,8 +123,8 @@ Deliberate omissions, each with a home elsewhere:
 - **Anonymous chat sessions** (`user_id NULL`) and transcripts — DESIGN.md §9.
 - **`Invitation`** — needed before a second person can join a firm; drags in email.
 - **`Team` / `TeamMembership`** — the decided direction (DESIGN.md §3), built with
-  `dossiers`. A *second axis* on top of `memberships`, not a replacement: a team lead is
-  `Membership(role=lawyer)` + `TeamMembership(role=lead)`.
+  `dossiers`. A *second axis* on top of `users.role`: a team lead is
+  `users.role = 'lawyer'` + `TeamMembership(role='lead')`.
 - **`dossiers.assigned_to_user_id`** — the schema above has **no assignee column**, so
   nothing yet records which lawyer works a case. §6 escalates to "a human" without saying
   which. Needed when `dossiers` is designed.

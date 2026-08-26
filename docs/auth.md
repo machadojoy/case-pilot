@@ -27,21 +27,15 @@ Pre-Q2, `register` minted a global identity and creating a firm came later. Now 
 account needs an `org_id`, so **the first user of a new firm must be created together with
 the firm** — there is nothing to scope them to otherwise.
 
-That makes firm-side registration exactly what DESIGN.md already calls *creation is
-transactional*: `Organization` + `User` + `Membership(role=owner)`, all-or-nothing, one
-commit owned by the router.
+So firm-side registration *is* firm creation: `Organization` + `User(role='owner')` in one
+transaction, all-or-nothing, the router owning the boundary. That is exactly what
+DESIGN.md calls *creation is transactional*.
 
-**So this slice now needs `Membership`** — which reverses the auth-then-`Membership`
-ordering. Three ways to take it:
-
-| | Approach | Cost |
-|---|---|---|
-| **A** | Ship register creating `Organization` + `User`, no `Membership`; backfill roles later | Leaves every firm ownerless — an unadministrable state we would then have to migrate out of |
-| **B** | `Membership` first, then auth | `Membership` has nothing to attach to: org creation doesn't make users yet, and there is no auth to test it through |
-| **C** | **Merge them.** One slice: register (Org + User + Membership(owner)) + login + me | Bigger slice, but the only one that is coherent at every point — and it is the vertical DESIGN.md already describes |
-
-**Recommendation: C.** It also closes both live problems at once — `POST /organizations`
-stops being an anonymous endpoint, and `GET /organizations` becomes scopeable.
+**This no longer drags `Membership` into the slice.** An earlier version of this spec said
+it did, and proposed merging the auth and `Membership` slices to cope. That went away when the
+`Membership` table was collapsed into `users.role` (DESIGN.md §3, 2026-08-26) — the owner grant
+is now a column value set during the same `INSERT`, not a second table to populate. The
+slice is back to three endpoints.
 
 ### 2. Login needs to know which firm
 
@@ -62,12 +56,12 @@ resource being touched. Add `org_id` to the claims alongside `sub`.
 
 | Method | Path | Notes |
 |---|---|---|
-| POST | `/api/v1/auth/register` | **firm signup**: Organization + User(`unverified`) + Membership(`owner`), one transaction |
+| POST | `/api/v1/auth/register` | **firm signup**: Organization + User(`role='owner'`, `status='unverified'`), one transaction |
 | POST | `/api/v1/auth/login` | `org_slug` + email + password → JWT carrying `sub` and `org_id` |
 | GET | `/api/v1/users/me` | the caller's own row |
 
 Registering an *additional* user into an existing firm is **not** in this slice — that is
-the invitation flow, which needs an `Invitation` entity and a mailer (`models/membership.md`).
+the invitation flow, which needs an `Invitation` entity and a mailer.
 
 `/users/me`, **not** `/auth/me` — PHASE1.md says otherwise and is superseded. It lives in
 `app/users/`, next to the rule that every user query carries `org_id` (DESIGN.md §3). Credentials and tokens live in a new
@@ -140,10 +134,15 @@ Each of these is named so it is a deferral, not an oversight:
 - **Email change** (`pending_email`), **login rate limiting / lockout**, **`closed`
   status**.
 - **Authorization of any kind.** `POST /organizations` stays open, and
-  `GET /organizations` still lists every firm to everyone. Both need `Membership`; this
-  slice is authentication only.
+  `GET /organizations` still lists every firm to everyone. Scoping them is authorization,
+  which this slice deliberately does not do — but note `register` does now make
+  `POST /organizations` redundant for firm signup.
 
 ## After this slice
 
-`Membership` — which then makes org creation grant its creator ownership, and scopes
-`GET /organizations` to firms you actually belong to.
+**Authorization.** `register` grants ownership, but nothing yet *checks* a role. Next is
+the dependency that reads `role` off the token's user and gates the org endpoints —
+scoping `GET /organizations` and closing the anonymous `POST`.
+
+Then invitations (a second person joining a firm), which needs an `Invitation` entity and
+a mailer.

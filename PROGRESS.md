@@ -23,7 +23,7 @@ Also decided, and easy to miss because they aren't numbered questions: **§2a** 
 belongs to one firm, so CasePilot is a **pure processor**; never cascade from `users` to
 `dossiers`; Art 9 data is unavoidable here), **§5's two mint paths** (firm staff sign up →
 `unverified`; clients are captured at intake → `pending`), and **§3's Teams direction**
-(`Membership` = what you *are*, `TeamMembership` = what you *do*; built with `Dossier`).
+(`users.role` = what you *are*, `TeamMembership` = what you *do*; built with `Dossier`).
 
 > ⚠️ **Q2 reversed a decision the code already implements.** `users` is shipped *without*
 > `org_id` and with a globally-unique email index. Before any auth work: add `org_id`, and
@@ -36,7 +36,7 @@ belongs to one firm, so CasePilot is a **pure processor**; never cascade from `u
 ## Current status — updated 2026-08-26
 
 **Phase:** 1 (skeleton + models + auth). **Accounts exist: `users` is a real
-table on Postgres.** Next model in the build order is `Membership` — which, unlike
+table on Postgres.** Next is the auth slice — which, unlike
 `User`, has no design doc yet, so the next step is *design*, not code.
 
 Current API surface:
@@ -51,7 +51,7 @@ GET  /api/v1/organizations/{id}     200 / 404
 Done 2026-08-26 (PR #14, merged to `main`):
 - **`User` model shipped** — nine columns, per `docs/models/user.md`. **Note:** shipped
   before Q2, so it still lacks `org_id` and has a globally-unique email index.
-  Table only: no router/service/schemas, because nothing can use them until `Membership`
+  Table only: no router/service/schemas, because nothing can use them until auth
   lands. `hashed_password` / `sessions_valid_from` / `email_verified_at` are nullable and
   unused for now; they're there because retrofitting them later costs more.
 - **Two guarantees deliberately live in the database, not in application code.**
@@ -88,7 +88,7 @@ Done 2026-08-21 (design only — no code; all merged to `main`):
   `owner`/`admin`/`lawyer`/`staff`, and **`customer` is not a role** — that relationship is
   carried by `Dossier.customer_user_id`. Insider vs outsider are different *authorization
   shapes*, not permission levels, and a firm's own employee can be its client (which two
-  `Membership` rows can't express without breaking the `(user, org)` key).
+  role *values* can't express: she cannot be both `lawyer` and `customer` in one column.
 - **DESIGN.md §2a — CasePilot and each firm are separate data controllers.** Erasing a
   `User` does not erase the person; **never** `ON DELETE CASCADE` from `users` to tenant
   data; Art 9 special-category data is unavoidable in this domain, which makes the
@@ -112,7 +112,7 @@ Done 2026-08-19 (all merged to `main`):
   commit, so a signup failing after it left an orphaned tenant (no owner, slug taken).
   Services now stage only (`session.begin_nested()` + `flush()`, so a slug-collision
   retry doesn't poison the caller's transaction); the router commits. This is what makes
-  the upcoming atomic signup (Organization + User + Membership) possible.
+  the upcoming atomic signup (Organization + User in one commit) possible.
 - **`POST /organizations` + `GET /organizations/{id}`** — the first real endpoint, and
   the first place the `schemas.py / service.py / router.py` module shape exists in code
   rather than only in `CLAUDE.md`. Copy this module for the next feature.
@@ -162,7 +162,7 @@ Known/minor (not blocking):
 ## Design pivot (2026-08-13)
 
 We reframed the whole domain: **multi-tenant SaaS**, each law firm = an isolated
-**workspace** (tenant); global `User` identity + `Membership(role)`; customers self-serve
+**workspace** (tenant); per-firm `User` accounts carrying `role`; customers self-serve
 intake; **AI agents** do triage (assess + auto-decide within firm policy, escalate edge
 cases — no human intake clerk). Captured in `DESIGN.md`; per-model docs in `docs/models/`.
 This **supersedes** PHASE1.md's flat data model (and its human-triage assumption).
@@ -171,7 +171,7 @@ This **supersedes** PHASE1.md's flat data model (and its human-triage assumption
 
 **Q2 landed 2026-08-26 and reshaped this.** Read `docs/auth.md` *and* the ⚠️ note above
 before starting. The slice is no longer "register + login + me" — it now has to carry
-`Membership` too, and the shipped `users` table needs a migration first.
+a migration on the shipped `users` table first.
 
 ### Step 0 — migrate `users` for per-firm accounts
 
@@ -179,6 +179,7 @@ Shipped `users` has no `org_id` and a **globally** unique email index. Q2 makes 
 per-firm, so:
 
 - add `org_id` (FK → `organizations.id`, not null);
+- add `role` (nullable str + CHECK: `owner`/`admin`/`lawyer`/`staff`; NULL = client);
 - drop `uq_users_email_lower`, add a composite unique on `(org_id, lower(email))`.
 
 No data exists, so it is small — but **autogenerate will not write a functional index**,
@@ -187,16 +188,16 @@ so that part is hand-written, same as the CHECK constraints.
 ### Then the slice itself 🔷 (scope change — wants sign-off)
 
 ```
-POST /api/v1/auth/register    Organization + User(unverified) + Membership(owner), one txn
+POST /api/v1/auth/register    Organization + User(role=owner, status=unverified), one txn
 POST /api/v1/auth/login       org_slug + email + password -> JWT carrying sub AND org_id
 GET  /api/v1/users/me         the caller's own row
 ```
 
-**Why `Membership` is now inside this slice:** an account needs an `org_id`, so the first
-user of a firm cannot exist before the firm does. Registration therefore *is* firm
-creation — which is exactly DESIGN.md's "creation is transactional": `Organization` +
-`User` + `Membership(owner)`, all-or-nothing. Shipping without `Membership` would leave
-every firm ownerless. `docs/auth.md` lays out the three options and why merging wins.
+**Registration is firm creation.** An account needs an `org_id`, so the first user of a
+firm cannot exist before the firm does — `Organization` + `User(role='owner')` in one
+transaction. An earlier version of this note said that pulled `Membership` into the slice;
+that went away when `Membership` was collapsed into `users.role`, so the owner grant is
+now a column value set in the same `INSERT`.
 
 This also closes both live problems at once: `POST /organizations` stops being an anonymous
 endpoint, and `GET /organizations` becomes scopeable.
@@ -224,33 +225,11 @@ one-person workspace), refresh tokens, password reset, email change, rate limiti
 
 ---
 
-**`Membership` — the slice *after* auth.** Design is **done**:
-`docs/models/membership.md` (written 2026-08-26). Scope is deliberately small — rows are
-created only by the org-creation flow, granting the creator `owner`; no invitations, no
-member list, no removal. That still closes the live leak on `GET /organizations` and makes
-`POST /organizations` authorizable. Key points:
-
-- Shape: `(id, user_id, org_id, role)` + timestamps. **Unique on `(user_id, org_id)`.**
-  Nothing else — no `invited_by`, no `status`.
-- **`role` is `str` + CHECK** generated from a `StrEnum`, same as `User.status`, and the
-  reasoning is stronger here because roles churn more. Autogenerate **cannot see CHECK
-  changes** — hand-write it and prove it with `\d memberships`.
-- **Revocation is a hard `DELETE`**, never a tombstone — a tombstone would occupy the
-  `(user_id, org_id)` unique slot and block re-adding someone who left. This is the
-  deliberate counter-example to `User`'s erasure.
-- **Erasing a `User` deletes their memberships** — a tombstone with a live membership is a
-  ghost employee with access. Not a contradiction of §2a: a membership is an *access
-  grant*, a `Dossier` is a *legal record*. Grants go, records stay. The FK still must not
-  be `ON DELETE CASCADE`.
-- Recorded but not enforceable yet (no removal/role-change endpoints exists): **≥1 owner
-  per org** (service-level — Postgres cannot express it, so don't assume it does) and
-  **no self-role-change**.
-- **Teams don't change this table.** DESIGN.md §3 records `Team`/`TeamMembership` as the
-  decided direction, built with `Dossier` — a second axis, not a replacement. A team lead
-  is `Membership(role=lawyer)` + `TeamMembership(role=lead)`. Do **not** add `lead` to
-  this enum or drop the unique constraint in anticipation.
-
-Then build it with the `add-model` skill.
+**`Membership` was deleted as a concept on 2026-08-26** — it collapsed into `users.role`
+(nullable; NULL = client). `docs/models/membership.md` is gone; the role set, the ≥1-owner
+invariant, the no-self-escalation rule and revocation-closes-the-account all live in
+`docs/models/user.md` now. The build order is therefore
+**Organization → User → reference data → Dossier**.
 
 **Needs the DB up:** `colima start` → `docker compose up -d`, or pytest fails locally.
 
@@ -259,14 +238,15 @@ Deferred, worth doing when convenient (small, independent):
   would not fail CI. Consider switching the test schema to `alembic upgrade head`.
 - `starlette.testclient` warns that `httpx` is deprecated in favour of `httpx2`.
 - No auth on `POST /organizations` — anyone can create a tenant. Gating it needs only
-  **authentication** (an earlier version of this note wrongly said `User` + `Membership`).
-  What needs `Membership` is making creation grant its creator ownership, and scoping
-  `GET /organizations` to the caller's firms — today it lists every firm to everyone.
+  **authentication** (an earlier version of this note wrongly said `User` + `Membership`;
+  `Membership` no longer exists — role is a column on `users`). What needs *authorization*
+  is scoping `GET /organizations` to the caller's firm — today it lists every firm to
+  everyone.
   Both are additive to the route, not a reshape.
 - **`PATCH` and `DELETE /organizations` are missing on purpose** — recorded in
   `docs/models/organization.md` so it doesn't read as an oversight. `PATCH` is a one-field
   endpoint (`name`; `slug` is the stable handle) waiting on *authorization*, so it ships
-  with the `Membership` slice. `DELETE` is not a Phase 1 feature at all: deleting a tenant
+  with the authorization work. `DELETE` is not a Phase 1 feature at all: deleting a tenant
   would destroy `Dossier`s the firm is legally obliged to keep (DESIGN.md §2a). The real
   operation is **closure** — lifecycle, so it belongs in `Organization.status`, like
   `closed` does for `User`.
@@ -280,9 +260,10 @@ Deferred, worth doing when convenient (small, independent):
 - [x] `core/db.py` (engine from DATABASE_URL + session dependency)
 - [x] Alembic set up + first migration (against Postgres)
 - [x] Model: Organization (tenant root)
-- [ ] Models: ~~User~~, Membership, Jurisdiction, CaseType, Dossier
-      (**`User` shipped 2026-08-26** — `docs/models/user.md`. `Membership` is next and
-      still needs a design doc; build order is in DESIGN.md §Build order)
+- [ ] Models: ~~User~~, ~~Membership~~ (collapsed into `users.role`), Jurisdiction,
+      CaseType, Dossier
+      (**`User` shipped 2026-08-26** — `docs/models/user.md`, though it predates Q2 and
+      needs `org_id` + `role`. Build order is in DESIGN.md §Build order)
       (per DESIGN.md — supersedes PHASE1.md's flat model + the `Lawyer` M:N entity)
 - [x] Endpoints: organizations (create + list + get by id), under `/api/v1`
 - [ ] JWT auth: register / login / me (PyJWT + pwdlib)
@@ -313,7 +294,7 @@ Deferred, worth doing when convenient (small, independent):
   - **`User` is looked up, never enumerated.** The only global user endpoint is
     `GET /api/v1/users/me`; there is no `GET /api/v1/users`, because a global listing
     would expose every firm's client base. Anything that pages through people belongs to
-    a tenant-scoped resource carrying `org_id` (staff → `Membership`, clients →
+    a tenant-scoped resource carrying `org_id` (staff → `role IS NOT NULL`, clients →
     `Dossier`). See DESIGN.md §3.
 - `tests/conftest.py` imports the FastAPI app **aliased** (`app as fastapi_app`) because
   the bare name `app` is the package. Don't "simplify" that back.
