@@ -140,11 +140,38 @@ This **supersedes** PHASE1.md's flat data model (and its human-triage assumption
 
 ## Next up (the very next step)
 
-**`Membership` — design it first.** It is the last thing standing between the codebase
-and real auth: `POST /organizations` is still unauthenticated, and gating it needs to
-know who belongs to which firm.
+**Undecided as of 2026-08-26 — two slices are unblocked, pick one.** Do not read the
+`Membership` write-up below as "the next step"; it is one of two.
 
-Unlike `User`, there is **no `docs/models/membership.md`** — write it before any code
+**Correction to an earlier claim in this file:** `Membership` is *not* a prerequisite for
+auth, and gating `POST /organizations` needs only **authentication**, not authorization.
+The real dependency graph:
+
+| slice | needs | blocked on |
+|---|---|---|
+| `POST /auth/login`, `GET /auth/me` | `User` only | **nothing** |
+| `POST /auth/register` | a decision on signup-first (below) | `unverified` status, or the intake lead flow |
+| `GET /organizations` scoped to *my* firms | membership | `Membership` |
+| org creation granting its creator ownership | membership | `Membership` |
+
+So the choice is: **auth first** (closes a vertical slice; leaves org creation
+temporarily granting no ownership), or **`Membership` first** (no new endpoint, but makes
+the two *existing* org endpoints correct rather than placeholder — today
+`GET /api/v1/organizations` lists every firm in the system to everyone).
+
+**The snag in `register`, if you go auth-first.** DESIGN.md §5 forbids the register
+endpoint PHASE1.md describes. A `User` is minted by *email capture at a firm's intake*,
+and activation is "prove you control the mailbox, **then** set a password — never set a
+password on the existing row". PHASE1.md's `POST /auth/register` belongs to the flat model
+§5 supersedes. Note `pending` ≠ `unverified`: a **lead** is powerless precisely because
+*anyone* can type your email into a firm's intake form, whereas a signup-first user set
+their own password and has merely not proven the mailbox. The fix is small and already
+anticipated — add `unverified` to `UserStatus`, which `docs/models/user.md` predicts will
+produce an **empty autogenerate diff** and so needs a hand-written CHECK migration.
+
+---
+
+**`Membership` — if you pick this one, design it first.** Unlike `User`, there is **no `docs/models/membership.md`** — write it before any code
 (step 1 of the `add-model` skill). The central question is already locked, so this
 should be a short design, not another multi-session one:
 
@@ -165,8 +192,7 @@ should be a short design, not another multi-session one:
   separate `Invitation`), and whether the FK to `users` needs `ON DELETE` at all —
   §2a says **never cascade** from `users` into tenant data.
 
-Then: build it with the `add-model` skill, and only then the JWT auth slice
-(register / login / me), which is what finally lets `POST /organizations` be gated.
+Then build it with the `add-model` skill.
 
 **Needs the DB up:** `colima start` → `docker compose up -d`, or pytest fails locally.
 
@@ -174,9 +200,11 @@ Deferred, worth doing when convenient (small, independent):
 - Tests build their schema with `create_all`, *not* migrations, so a broken migration
   would not fail CI. Consider switching the test schema to `alembic upgrade head`.
 - `starlette.testclient` warns that `httpx` is deprecated in favour of `httpx2`.
-- No auth on `POST /organizations` — anyone can create a tenant. Intentional: gating it
-  needs `User` + `Membership`. Revisit when auth lands; it's an additive dependency on
-  the route, not a reshape.
+- No auth on `POST /organizations` — anyone can create a tenant. Gating it needs only
+  **authentication** (an earlier version of this note wrongly said `User` + `Membership`).
+  What needs `Membership` is making creation grant its creator ownership, and scoping
+  `GET /organizations` to the caller's firms — today it lists every firm to everyone.
+  Both are additive to the route, not a reshape.
 
 ## Phase 1 checklist
 
