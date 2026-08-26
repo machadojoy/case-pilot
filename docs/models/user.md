@@ -61,9 +61,11 @@ CheckConstraint(
 )
 ```
 
-**Alembic autogenerate detects neither enum-value changes nor CHECK-constraint changes.**
-Either way this migration is written by hand, deliberately — and since tests build their
-schema with `create_all` rather than migrations, nothing will fail to warn you.
+**Autogenerate emits a CHECK on `create_table` but never detects a *change* to one.**
+Verified when building this (2026-08-26): the initial migration rendered
+`sa.CheckConstraint("status IN ('pending', 'active')", ...)` on its own. Adding
+`unverified` later will produce an empty diff, so that one is hand-written — and since
+tests build their schema with `create_all` rather than migrations, nothing warns you.
 
 Note also that `table=True` **disables Pydantic validation** in SQLModel, so annotating
 the attribute as `UserStatus` gives no runtime guarantee — `User(status="banana")`
@@ -222,5 +224,12 @@ the firm's record. Often the same digits, genuinely different facts.
 
 ## To resolve when we build
 
-- Index: unique on `email` (the lowercased value). No index on `status` — low cardinality.
+- ~~Index: unique on `email` (the lowercased value).~~ **Resolved (2026-08-26):** a
+  functional unique index, `Index("uq_users_email_lower", text("lower(email)"),
+  unique=True)`, rather than `unique=True` on the column plus a `.lower()` in the
+  service. Same reasoning as the CHECK above — `table=True` disables Pydantic
+  validation, so a `@field_validator` on the model would never fire and normalisation
+  would rest entirely on every call site remembering. The database is the only arbiter.
+  Consequence for the service slice: lookups must be written `where lower(email) = :x`
+  to use the index. No index on `status` — low cardinality.
 - Whether `full_name` is captured from the intake chat or asked for explicitly.

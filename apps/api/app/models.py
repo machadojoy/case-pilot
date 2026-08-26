@@ -8,5 +8,6 @@ is invisible to them — autogenerate will silently skip it and no migration is 
 """
 
 from app.organizations.models import Organization
+from app.users.models import User
 
-__all__ = ["Organization"]
+__all__ = ["Organization", "User"]
