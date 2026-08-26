@@ -239,6 +239,13 @@ Deferred, worth doing when convenient (small, independent):
   What needs `Membership` is making creation grant its creator ownership, and scoping
   `GET /organizations` to the caller's firms — today it lists every firm to everyone.
   Both are additive to the route, not a reshape.
+- **`PATCH` and `DELETE /organizations` are missing on purpose** — recorded in
+  `docs/models/organization.md` so it doesn't read as an oversight. `PATCH` is a one-field
+  endpoint (`name`; `slug` is the stable handle) waiting on *authorization*, so it ships
+  with the `Membership` slice. `DELETE` is not a Phase 1 feature at all: deleting a tenant
+  would destroy `Dossier`s the firm is legally obliged to keep (DESIGN.md §2a). The real
+  operation is **closure** — lifecycle, so it belongs in `Organization.status`, like
+  `closed` does for `User`.
 
 ## Phase 1 checklist
 
