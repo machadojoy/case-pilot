@@ -5,10 +5,11 @@ Living status + handoff notes. Update this at the end of every session.
 
 ---
 
-## Current status — updated 2026-08-21
+## Current status — updated 2026-08-26
 
-**Phase:** 1 (skeleton + models + auth). **First vertical slice is closed: the API
-serves real requests against Postgres.** Next model in the build order is `User`.
+**Phase:** 1 (skeleton + models + auth). **The identity plane exists: `users` is a real
+table on Postgres.** Next model in the build order is `Membership` — which, unlike
+`User`, has no design doc yet, so the next step is *design*, not code.
 
 Current API surface:
 
@@ -18,6 +19,38 @@ POST /api/v1/organizations          201
 GET  /api/v1/organizations          paginated: {items, total, offset, limit}
 GET  /api/v1/organizations/{id}     200 / 404
 ```
+
+Done 2026-08-26 (PR #14, merged to `main`):
+- **`User` model shipped** — the identity plane, nine columns, per `docs/models/user.md`.
+  Table only: no router/service/schemas, because nothing can use them until `Membership`
+  lands. `hashed_password` / `sessions_valid_from` / `email_verified_at` are nullable and
+  unused for now; they're there because retrofitting them later costs more.
+- **Two guarantees deliberately live in the database, not in application code.**
+  `table=True` disables Pydantic validation in SQLModel, so a `@field_validator` on the
+  model would never fire — `User(status="banana")` constructs happily. Hence:
+  - `ck_users_status`, generated from the `UserStatus` StrEnum (one source of truth).
+  - `uq_users_email_lower`, a **functional unique index on `lower(email)`**. Chosen over
+    `unique=True` + a `.lower()` in the service: one call site forgetting to normalise
+    would silently fork an identity. **Consequence for the auth slice: email lookups must
+    be written `where lower(email) = :x` or they won't use the index.**
+- **`TimestampMixin` was quietly broken and is now fixed.** A SQLAlchemy `Column`
+  instance belongs to exactly one `Table`, and SQLModel returns an `sa_column` verbatim
+  (`if isinstance(sa_column, Column): return sa_column`), so the mixin's two shared
+  Column objects had bound to `organizations` and had nothing left for a second table —
+  `User` failed with *"Column object 'created_at' already assigned to Table
+  'organizations'"*. It was only ever correct because it had a single subclass. Now it
+  passes the *recipe* (`sa_type` + `sa_column_kwargs`) so SQLModel builds a fresh column
+  per subclass; `alembic check` confirms the `organizations` DDL is unchanged.
+- **First two `# ty: ignore` comments in the repo**, both in `TimestampMixin`. SQLModel
+  annotates `sa_type` as `type[Any]` but wants a parameterised type *instance*; the
+  annotation is wrong upstream, not the call. `@declared_attr` (SQLAlchemy's canonical
+  mixin answer) collides with pydantic's metaclass; a named `DateTime` subclass would
+  make Alembic render `app.core.models.UTCDateTime()` into every future migration
+  without an import. Both were tried and rejected — don't re-litigate.
+- **`docs/models/user.md` corrected on two points the build disproved** — autogenerate
+  *does* emit a CHECK on `create_table` (only *changes* go undetected), and the open
+  "index on email" question is resolved.
+- 28 tests, **100% coverage**. Migration round-trips; `alembic check` clean.
 
 Done 2026-08-21 (design only — no code; all merged to `main`):
 - **DESIGN.md §10 Q3 and Q5 locked.** Q3: progressive identity in *three* states —
@@ -107,40 +140,35 @@ This **supersedes** PHASE1.md's flat data model (and its human-triage assumption
 
 ## Next up (the very next step)
 
-**`User` model — build it.** Every decision it depends on is now made and written down;
-this slice is pure TDD. Read `docs/models/user.md` first (nine columns, reasoning per
-field), then use the `add-model` skill.
+**`Membership` — design it first.** It is the last thing standing between the codebase
+and real auth: `POST /organizations` is still unauthenticated, and gating it needs to
+know who belongs to which firm.
 
-Shape, so you don't have to re-derive it:
+Unlike `User`, there is **no `docs/models/membership.md`** — write it before any code
+(step 1 of the `add-model` skill). The central question is already locked, so this
+should be a short design, not another multi-session one:
 
-```
-id  email(unique, lowercased)  hashed_password?  full_name?
-status(str + CHECK: pending|active)  email_verified_at?
-sessions_valid_from?  erased_at?  created_at  updated_at
-```
+- **DESIGN.md §10 Q5 is decided**: roles are `owner` / `admin` / `lawyer` / `staff`, and
+  **`customer` is not a role** — that relationship is carried by
+  `Dossier.customer_user_id`. A firm's own employee can be its client, which two
+  `Membership` rows cannot express without breaking the `(user, org)` key.
+- Shape is presumably `(user_id, org_id, role)` with a unique constraint on
+  `(user_id, org_id)`, plus the usual UUID PK and timestamps.
+- **`role` gets the same `str` + CHECK treatment as `User.status`** — same reasoning
+  (`table=True` kills validation; Postgres has no `ALTER TYPE ... DROP VALUE`), and
+  roles are *more* likely to churn than statuses. Generate it from a `StrEnum`.
+- Worth deciding explicitly in the doc: **revocation is a hard `DELETE`, not a
+  tombstone.** `docs/models/user.md` already flags this as the counter-example to
+  `User`'s erasure — a tombstoned membership would occupy the `(user, org)` unique slot
+  forever and block re-adding someone who once left.
+- Open and *not* blocking the table: how someone is invited (`pending` membership vs a
+  separate `Invitation`), and whether the FK to `users` needs `ON DELETE` at all —
+  §2a says **never cascade** from `users` into tenant data.
 
-Three things in there are non-obvious and each has a section in the design doc:
-- **`status` is a `str` + CHECK constraint, not a PG enum** — no `ALTER TYPE ... DROP
-  VALUE` exists, and `unverified`/`closed` are both expected. Note `table=True` disables
-  Pydantic validation, so the CHECK is the *only* enforcement. Generate it from the
-  `StrEnum` so there's one source of truth. **Alembic autogenerate does not detect CHECK
-  constraint changes** — write that part by hand.
-- **`sessions_valid_from`** exists because DESIGN.md §5 requires invalidating sessions on
-  verification and stateless JWT has nothing to invalidate.
-- **`erased_at`, not soft delete** — a hidden row still holds the email (blocking
-  re-registration via the unique index), the name, and a live password hash.
+Then: build it with the `add-model` skill, and only then the JWT auth slice
+(register / login / me), which is what finally lets `POST /organizations` be gated.
 
-Then: `alembic revision --autogenerate` → hand-write the CHECK → PR.
-
-**Scope: the table only.** No endpoints, no auth, no password hashing, no
-register/login/me — those are the next slice and depend on `Membership`. The columns
-that exist *for* auth (`hashed_password`, `sessions_valid_from`, `email_verified_at`)
-are nullable and stay unused for now; they're here because retrofitting them later is
-more expensive than carrying them. Don't build a `service.py` or `router.py` for this
-slice — there's nothing for them to do yet.
-
-**Needs the DB up:** `colima start` → `docker compose up -d` (Colima was down at the end
-of this session, so pytest fails locally until you do).
+**Needs the DB up:** `colima start` → `docker compose up -d`, or pytest fails locally.
 
 Deferred, worth doing when convenient (small, independent):
 - Tests build their schema with `create_all`, *not* migrations, so a broken migration
@@ -159,8 +187,9 @@ Deferred, worth doing when convenient (small, independent):
 - [x] `core/db.py` (engine from DATABASE_URL + session dependency)
 - [x] Alembic set up + first migration (against Postgres)
 - [x] Model: Organization (tenant root)
-- [ ] Models: User, Membership, Jurisdiction, CaseType, Dossier
-      (`User` is designed and unblocked — `docs/models/user.md`)
+- [ ] Models: ~~User~~, Membership, Jurisdiction, CaseType, Dossier
+      (**`User` shipped 2026-08-26** — `docs/models/user.md`. `Membership` is next and
+      still needs a design doc; build order is in DESIGN.md §Build order)
       (per DESIGN.md — supersedes PHASE1.md's flat model + the `Lawyer` M:N entity)
 - [x] Endpoints: organizations (create + list + get by id), under `/api/v1`
 - [ ] JWT auth: register / login / me (PyJWT + pwdlib)
@@ -208,6 +237,19 @@ Deferred, worth doing when convenient (small, independent):
   drifted from the migrations. Requires the DB up (`docker compose up -d`).
 - **New models must be imported in `app/models.py`** or autogenerate silently emits an
   empty migration. This is the single easiest way to lose an hour here.
+- **Don't "simplify" `TimestampMixin` back to `sa_column=Column(...)`.** SQLModel returns
+  an `sa_column` verbatim, and a Column instance belongs to exactly one Table — a shared
+  one binds to whichever model inherits first and the *next* table to use the mixin dies
+  with "Column object 'created_at' already assigned to Table 'organizations'". It must
+  keep passing the recipe (`sa_type` + `sa_column_kwargs`). Its two `# ty: ignore`s are
+  load-bearing for the same reason; `@declared_attr` and a named `DateTime` subclass were
+  both tried and both cost more.
+- **Alembic autogenerate emits a CHECK constraint on `create_table`, but never detects a
+  *change* to one.** Adding a `UserStatus` value later produces an **empty diff** — write
+  that migration by hand. Tests build their schema with `create_all`, so nothing warns.
+- **Email lookups must be `where lower(email) = :x`.** Uniqueness is enforced by the
+  functional index `uq_users_email_lower`, not by `unique=True` on the column, so a plain
+  `where email = :x` is both case-sensitive and unable to use the index.
 - `alembic.ini` has `post_write_hooks` running ruff over each generated revision, so
   new migrations land pre-formatted. `script.py.mako` is customized (modern typing +
   `import sqlmodel.sql.sqltypes`) — don't overwrite it by re-running `alembic init`.
