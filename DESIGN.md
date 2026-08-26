@@ -145,12 +145,26 @@ Discover (firm's intake) → Tell story + email (lead)
   no value for the globally-unique email column. `User` therefore needs a nullable
   `hashed_password`, an explicit `status`, and `email_verified_at`.
 
-  **This supersedes `PHASE1.md`'s `POST /auth/register`.** Registration is not the
-  entry point: a lead is minted by the *intake* flow when someone gives an email, and
-  activation is "prove mailbox control, **then** set a password". A register endpoint as
-  PHASE1 describes it would be a second, parallel way to create a `User`, and the two
-  paths would disagree about whether verification comes before or after credentials.
-  Same trap as password-reset-vs-activation (`docs/models/user.md`).
+  **Two mint paths, for two populations.** ✅ (2026-08-26) A `User` row is created either
+  by signup or by intake, and conflating them is what `PHASE1.md` got wrong:
+
+  | Population | How they arrive | Minted as | Threat model |
+  |---|---|---|---|
+  | **firm staff** — a firm buying the SaaS | marketing site, **signs up** | `unverified` | they chose their own password; they merely haven't proven the mailbox |
+  | **clients** — that firm's prospects | **intake** email capture | `pending` | *anyone* can type your email into a firm's intake form |
+
+  A firm owner never comes through intake — intake is for *their* clients. So
+  `POST /auth/register` does exist, but only as the **firm-side** path; it is emphatically
+  not how a customer becomes a user.
+
+  **`pending` ≠ `unverified`, and the difference is the whole point.** A lead is
+  powerless because its email was supplied by a third party, so activation must be "prove
+  mailbox control, **then** set a password" — never "set a password on the existing row".
+  A signup-first user already holds a credential nobody else chose.
+
+  `PHASE1.md`'s single `POST /auth/register` is still superseded: it assumed one flat path
+  for everyone, which would let a customer be minted with a self-chosen password and skip
+  the proof-of-control rule entirely.
 
   Protocol at each transition (all three are standard practice, not invention):
 

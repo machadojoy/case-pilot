@@ -140,38 +140,52 @@ This **supersedes** PHASE1.md's flat data model (and its human-triage assumption
 
 ## Next up (the very next step)
 
-**Undecided as of 2026-08-26 — two slices are unblocked, pick one.** Do not read the
-`Membership` write-up below as "the next step"; it is one of two.
+**Auth slice: `register` + `login` + `me`.** Decided 2026-08-26 — the order is *auth
+first, then `Membership`*. Full build spec in **`docs/auth.md`**; read it before starting.
 
-**Correction to an earlier claim in this file:** `Membership` is *not* a prerequisite for
-auth, and gating `POST /organizations` needs only **authentication**, not authorization.
-The real dependency graph:
+**`/users/me` cannot ship alone**, which is what settled the order: it needs a token →
+which needs login → which needs a password → and nothing in the system can currently give
+anyone one. Leads are minted `pending` with `hashed_password = None` by an intake flow
+that doesn't exist. Register, login and me are one slice or they are nothing.
 
-| slice | needs | blocked on |
-|---|---|---|
-| `POST /auth/login`, `GET /auth/me` | `User` only | **nothing** |
-| `POST /auth/register` | a decision on signup-first (below) | `unverified` status, or the intake lead flow |
-| `GET /organizations` scoped to *my* firms | membership | `Membership` |
-| org creation granting its creator ownership | membership | `Membership` |
+```
+POST /api/v1/auth/register    firm-side signup -> `unverified`
+POST /api/v1/auth/login       -> JWT
+GET  /api/v1/users/me         the only global-plane user read
+```
 
-So the choice is: **auth first** (closes a vertical slice; leaves org creation
-temporarily granting no ownership), or **`Membership` first** (no new endpoint, but makes
-the two *existing* org endpoints correct rather than placeholder — today
-`GET /api/v1/organizations` lists every firm in the system to everyone).
+That forced a design decision, now recorded in DESIGN.md §5: **two populations, two mint
+paths.** `register` is the *firm-side* path (a firm owner buying the SaaS); customers are
+minted `pending` by intake. `pending` ≠ `unverified` — a lead's email was typed in by a
+third party, so it must prove mailbox control before holding a credential; a signup-first
+user already chose their own password.
 
-**The snag in `register`, if you go auth-first.** DESIGN.md §5 forbids the register
-endpoint PHASE1.md describes. A `User` is minted by *email capture at a firm's intake*,
-and activation is "prove you control the mailbox, **then** set a password — never set a
-password on the existing row". PHASE1.md's `POST /auth/register` belongs to the flat model
-§5 supersedes. Note `pending` ≠ `unverified`: a **lead** is powerless precisely because
-*anyone* can type your email into a firm's intake form, whereas a signup-first user set
-their own password and has merely not proven the mailbox. The fix is small and already
-anticipated — add `unverified` to `UserStatus`, which `docs/models/user.md` predicts will
-produce an **empty autogenerate diff** and so needs a hand-written CHECK migration.
+Four ratified decisions, all detailed in `docs/auth.md`:
+
+1. **Add `unverified` to `UserStatus`** — autogenerate produces an **empty migration**
+   for this (it sees neither enum-value nor CHECK changes). Hand-write the
+   drop/create-constraint, and prove it with `alembic upgrade head` + `\d users`;
+   `create_all` in the tests will not catch a missing constraint.
+2. **Login eligibility:** anyone with a password who is not erased. `pending` is refused
+   structurally (no password), not by a status check.
+3. **JWT** HS256, `sub`/`iat`/`exp`, secret from config — and wire the
+   `iat < sessions_valid_from` rejection *now*. The column exists for it; retrofitting an
+   auth check is how the pre-hijacking window gets left open.
+4. **`GET /api/v1/users/me`**, not `/auth/me` (PHASE1.md is superseded).
+
+New module `app/auth/` for credentials/tokens; `/users/me` lives in `app/users/`.
+
+**Biggest deliberate cut:** no email sending, so no verification flow — nobody reaches
+`active` yet and `unverified` is the working state. Also out: refresh tokens, password
+reset, email change, rate limiting, and **authorization of any kind** (`POST
+/organizations` stays open; `GET /organizations` still lists every firm to everyone —
+both need `Membership`).
+
+**Needs the DB up:** `colima start` → `docker compose up -d`.
 
 ---
 
-**`Membership` — if you pick this one, design it first.** Unlike `User`, there is **no `docs/models/membership.md`** — write it before any code
+**`Membership` — the slice *after* auth. Design it first.** Unlike `User`, there is **no `docs/models/membership.md`** — write it before any code
 (step 1 of the `add-model` skill). The central question is already locked, so this
 should be a short design, not another multi-session one:
 
