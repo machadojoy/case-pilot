@@ -60,6 +60,24 @@ Consequences that shape the schema:
   `Dossier(org_id, customer_user_id)`. There is no customer `Membership` row.
   ✅ (Q5, 2026-08-20)
 
+### No tenant-agnostic user API ✅ (2026-08-26)
+
+The **only** global-plane user endpoint is `GET /api/v1/users/me`.
+
+There is no `GET /api/v1/users`. A global listing would expose every firm's client base
+to anyone authenticated — the exact inverse of §4's privacy property. Everything about
+*other* people is reached through org scope, never through `User`:
+
+| Question | Endpoint | Really a query over |
+|---|---|---|
+| who am I? | `GET /api/v1/users/me` | `User` (the one global read) |
+| who works at this firm? | `GET /api/v1/organizations/{id}/members` | `Membership` |
+| who are this firm's clients? | (via cases) | `Dossier` |
+
+The rule to hold onto: **`User` is looked up by identity, never enumerated.** If an
+endpoint would let you page through people, it belongs to a tenant-scoped resource and
+must carry `org_id`.
+
 ### Why `customer` is a distinct concept, not a role
 
 Insider and outsider are not two permission levels, they are two **authorization
@@ -126,6 +144,13 @@ Discover (firm's intake) → Tell story + email (lead)
   `user_id NULL` — no email means nothing to identify, and a "ghost `User`" would have
   no value for the globally-unique email column. `User` therefore needs a nullable
   `hashed_password`, an explicit `status`, and `email_verified_at`.
+
+  **This supersedes `PHASE1.md`'s `POST /auth/register`.** Registration is not the
+  entry point: a lead is minted by the *intake* flow when someone gives an email, and
+  activation is "prove mailbox control, **then** set a password". A register endpoint as
+  PHASE1 describes it would be a second, parallel way to create a `User`, and the two
+  paths would disagree about whether verification comes before or after credentials.
+  Same trap as password-reset-vs-activation (`docs/models/user.md`).
 
   Protocol at each transition (all three are standard practice, not invention):
 
