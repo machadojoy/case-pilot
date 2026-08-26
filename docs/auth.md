@@ -1,6 +1,8 @@
 # Auth slice — register / login / me
 
-> Status: **designed 2026-08-26, not yet built.** Decisions ratified; this is a build spec.
+> Status: **designed 2026-08-26; reshaped the same day by Q2** (per-firm accounts).
+> The slice is now bigger than "register/login/me" — see *What Q2 changed*. Build spec,
+> but the scope change wants your sign-off first. 🔷
 > Depends on `User` (shipped, PR #14). See `models/user.md` and `../DESIGN.md` §3, §5.
 
 ## Why this slice exists at all
@@ -14,17 +16,61 @@ That forced the question DESIGN.md §5 now answers: **two populations, two mint 
 `POST /auth/register` is the *firm-side* path (a firm owner buying the SaaS, minted
 `unverified`), not the customer path (intake email capture, minted `pending`).
 
+## What Q2 changed 🔷
+
+Accounts are now scoped to a firm (`users.org_id`), which has two consequences the
+original spec did not account for.
+
+### 1. A `User` cannot exist before its firm does
+
+Pre-Q2, `register` minted a global identity and creating a firm came later. Now every
+account needs an `org_id`, so **the first user of a new firm must be created together with
+the firm** — there is nothing to scope them to otherwise.
+
+That makes firm-side registration exactly what DESIGN.md already calls *creation is
+transactional*: `Organization` + `User` + `Membership(role=owner)`, all-or-nothing, one
+commit owned by the router.
+
+**So this slice now needs `Membership`** — which reverses the auth-then-`Membership`
+ordering. Three ways to take it:
+
+| | Approach | Cost |
+|---|---|---|
+| **A** | Ship register creating `Organization` + `User`, no `Membership`; backfill roles later | Leaves every firm ownerless — an unadministrable state we would then have to migrate out of |
+| **B** | `Membership` first, then auth | `Membership` has nothing to attach to: org creation doesn't make users yet, and there is no auth to test it through |
+| **C** | **Merge them.** One slice: register (Org + User + Membership(owner)) + login + me | Bigger slice, but the only one that is coherent at every point — and it is the vertical DESIGN.md already describes |
+
+**Recommendation: C.** It also closes both live problems at once — `POST /organizations`
+stops being an anonymous endpoint, and `GET /organizations` becomes scopeable.
+
+### 2. Login needs to know which firm
+
+`joy@x.com` may exist at several firms as unrelated accounts, so email alone no longer
+identifies anyone. Options considered: subdomain (`acme.casepilot.com` — DESIGN.md §4 calls
+branded domains cosmetic and later), path-scoping every route under
+`/api/v1/orgs/{slug}/…` (a bigger reshape of endpoints that already exist), or an
+`org_slug` field in the request body.
+
+**Recommendation: `org_slug` in the body** for `register` and `login` only. Cheapest, no
+reshape, and it moves to subdomain routing later without changing the token design.
+
+**The JWT then carries `org_id`**, so every subsequent request knows its tenant without
+repeating it — and the auth dependency can reject a token whose `org_id` does not match the
+resource being touched. Add `org_id` to the claims alongside `sub`.
+
 ## Endpoints
 
 | Method | Path | Notes |
 |---|---|---|
-| POST | `/api/v1/auth/register` | firm-side signup → `unverified` |
-| POST | `/api/v1/auth/login` | → JWT |
-| GET | `/api/v1/users/me` | the **only** global-plane user read |
+| POST | `/api/v1/auth/register` | **firm signup**: Organization + User(`unverified`) + Membership(`owner`), one transaction |
+| POST | `/api/v1/auth/login` | `org_slug` + email + password → JWT carrying `sub` and `org_id` |
+| GET | `/api/v1/users/me` | the caller's own row |
+
+Registering an *additional* user into an existing firm is **not** in this slice — that is
+the invitation flow, which needs an `Invitation` entity and a mailer (`models/membership.md`).
 
 `/users/me`, **not** `/auth/me` — PHASE1.md says otherwise and is superseded. It lives in
-`app/users/` so that DESIGN.md §3's rule (*`User` is looked up, never enumerated*) sits
-next to the only user router there will ever be. Credentials and tokens live in a new
+`app/users/`, next to the rule that every user query carries `org_id` (DESIGN.md §3). Credentials and tokens live in a new
 `app/auth/` module.
 
 Both feature routers carry only their own prefix; `app/api/v1.py` owns `/api/v1`.
@@ -62,12 +108,15 @@ Both feature routers carry only their own prefix; `app/api/v1.py` owns `/api/v1`
 
 ## Gotchas specific to this slice
 
-- **Login must query `lower(email) = lower(:email)`.** The unique index is functional
-  (`Index("uq_users_email_lower", text("lower(email)"), unique=True)`), so a plain
-  `WHERE email = :email` gets neither the index nor case-insensitivity.
-- **Registering an email that already exists must not reveal that it does.** The lead flow
-  has the same rule for the same reason (DESIGN.md §4) — a distinguishable response tells
-  an attacker which addresses hold accounts. Same-shaped response, and mind the timing.
+- **Login must query `org_id = :org AND lower(email) = lower(:email)`.** The index is
+  functional *and* now composite — `(org_id, lower(email))` — so a plain
+  `WHERE email = :email` gets neither the index, nor case-insensitivity, nor tenant
+  isolation. Missing the `org_id` term would let a password from firm A authenticate
+  against firm B's account with the same address. **This is the sharpest bug in the slice.**
+- **Registering an email that already exists must not reveal that it does.** Since Q2 this
+  is no longer about hiding cross-firm relationships — there are none — but a
+  distinguishable response still lets anyone enumerate which addresses a given firm holds,
+  which for a law firm is a client list. Same-shaped response, and mind the timing.
 - **Never say *which* credential was wrong** on login. One error for both.
 - **`table=True` disables Pydantic validation**, so the `UserCreate` *schema* (not the
   table model) is what enforces password length and email format.
