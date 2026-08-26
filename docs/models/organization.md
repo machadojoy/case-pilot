@@ -44,6 +44,29 @@ GET  /organizations/{id}     200 / 404
 **There is no `PATCH` and no `DELETE`, on purpose.** Recorded 2026-08-26 so the gap
 doesn't read as an oversight.
 
+### ⚠️ `POST /organizations` creates an unreachable tenant since Q2 🔷
+
+**Found in the 2026-08-26 audit; needs a decision.** Before Q2, accounts were global, so
+creating a bare `Organization` was fine — users joined it afterwards. Now an account
+cannot exist without an `org_id`, and **nothing can add a user to an existing firm**:
+`register` creates a *new* firm, and invitations are cut from the auth slice.
+
+So this endpoint produces a firm nobody can ever sign into, administer or delete. Not
+merely redundant with `register` — it manufactures orphans, and it does so *anonymously*,
+which makes it a free way to fill the table.
+
+Options:
+
+1. **Delete it.** `register` becomes the only way a firm comes into existence, which is
+   what DESIGN.md's "creation is transactional" describes anyway. Recommended.
+2. Keep it but require authentication and a role — meaningless, since the caller would
+   already belong to a different firm.
+3. Keep it until invitations exist, accepting orphan tenants meanwhile.
+
+**Recommendation: 1**, folded into the auth slice — `register` replaces it rather than
+sitting alongside it. That also disposes of "no auth on `POST /organizations`", which has
+been on the deferred list since the endpoint shipped.
+
 ### `PATCH` — waiting on authorization, not design
 
 Only `name` is mutable; `slug` is the stable handle and renaming it breaks every existing

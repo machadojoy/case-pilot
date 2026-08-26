@@ -25,11 +25,10 @@ belongs to one firm, so CasePilot is a **pure processor**; never cascade from `u
 `unverified`; clients are captured at intake → `pending`), and **§3's Teams direction**
 (`users.role` = what you *are*, `TeamMembership` = what you *do*; built with `Dossier`).
 
-> ⚠️ **Q2 reversed a decision the code already implements.** `users` is shipped *without*
-> `org_id` and with a globally-unique email index. Before any auth work: add `org_id`, and
-> replace `uq_users_email_lower` with a composite unique on `(org_id, lower(email))`. No
-> data exists, so it is a small migration — but autogenerate will not write the functional
-> index for you.
+> ⚠️ **Two decisions on 2026-08-26 reversed things the code already implements.** Shipped
+> `users` has no `org_id`, no `role`, and a *globally* unique email index. Before any auth
+> work it needs all three fixed — see **Step 0** below. No data exists, so it is small, but
+> autogenerate writes neither functional indexes nor CHECK constraints.
 
 ---
 
@@ -185,7 +184,7 @@ per-firm, so:
 No data exists, so it is small — but **autogenerate will not write a functional index**,
 so that part is hand-written, same as the CHECK constraints.
 
-### Then the slice itself 🔷 (scope change — wants sign-off)
+### Then the slice itself
 
 ```
 POST /api/v1/auth/register    Organization + User(role=owner, status=unverified), one txn
@@ -199,8 +198,9 @@ transaction. An earlier version of this note said that pulled `Membership` into 
 that went away when `Membership` was collapsed into `users.role`, so the owner grant is
 now a column value set in the same `INSERT`.
 
-This also closes both live problems at once: `POST /organizations` stops being an anonymous
-endpoint, and `GET /organizations` becomes scopeable.
+It does **not** close the two live problems on the org endpoints — that is authorization,
+the slice after this one. But see the ⚠️ below: registration creating firms makes
+`POST /organizations` actively wrong, not merely redundant.
 
 Ratified decisions (detail in `docs/auth.md`):
 
@@ -237,6 +237,11 @@ Deferred, worth doing when convenient (small, independent):
 - Tests build their schema with `create_all`, *not* migrations, so a broken migration
   would not fail CI. Consider switching the test schema to `alembic upgrade head`.
 - `starlette.testclient` warns that `httpx` is deprecated in favour of `httpx2`.
+- ⚠️ **`POST /organizations` creates an unreachable tenant since Q2** (found in the
+  2026-08-26 audit). Nothing can add a user to an existing firm — `register` creates a
+  *new* one and invitations are cut — so this endpoint manufactures firms nobody can sign
+  into, anonymously. **Recommendation: delete it as part of the auth slice**, letting
+  `register` be the only way a firm comes into existence. See `docs/models/organization.md`. 🔷
 - No auth on `POST /organizations` — anyone can create a tenant. Gating it needs only
   **authentication** (an earlier version of this note wrongly said `User` + `Membership`;
   `Membership` no longer exists — role is a column on `users`). What needs *authorization*
