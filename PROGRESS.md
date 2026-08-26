@@ -1,7 +1,27 @@
 # Progress
 
-Living status + handoff notes. Update this at the end of every session.
-(Stable rules live in `CLAUDE.md`; the full plan is in `PHASE1.md`.)
+**The entry point.** Living status + handoff notes; update at the end of every session.
+
+Where everything else lives: **`DESIGN.md`** = what we're building and why (domain
+decisions, the source of truth); **`CLAUDE.md`** = how we work (conventions, workflow);
+**`docs/models/*.md`** + **`docs/auth.md`** = per-slice detail with reasoning;
+**`PHASE1.md`** = the original brief, **historical and superseded** — background only.
+
+## Design status (`DESIGN.md` §10)
+
+| | Question | State |
+|---|---|---|
+| Q1 | Isolation: shared schema + `org_id` + **RLS** | ❓ open — not urgent until multi-tenant reads exist |
+| Q2 | Customer portal: global identity + workspace switcher | 🔷 **assumed throughout** §3's union query, never formally locked |
+| Q3 | Progressive identity (anonymous → lead → activated) | ✅ 2026-08-20 |
+| Q4 | UUID PKs everywhere | ✅ 2026-08-13 |
+| Q5 | Roles `owner/admin/lawyer/staff`; `customer` is not a role | ✅ 2026-08-20 |
+| Q6 | `Jurisdiction`/`CaseType`: global vs per-firm | ❓ open — blocks reference data, not auth |
+
+Also decided since, and easy to miss because they aren't numbered questions: **§2a** (each
+firm is its own data controller; never cascade from `users` to tenant data; Art 9 data is
+unavoidable here) and **§5's two mint paths** (firm staff sign up → `unverified`; clients
+are captured at intake → `pending`).
 
 ---
 

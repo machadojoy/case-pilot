@@ -9,7 +9,9 @@
 > by `DESIGN.md` wherever they differ — the domain was reframed on 2026-08-13 into a
 > multi-tenant SaaS (workspace per firm, global identity + `Membership`, AI triage
 > instead of a human intake clerk). The data model and the endpoint list below predate
-> that. Per-model detail lives in `docs/models/`.
+> that. Per-model and per-slice detail lives in `docs/models/` and `docs/auth.md`.
+> **Start at `PROGRESS.md`** (current status + next step); `CLAUDE.md` has the
+> conventions. Nothing below is a spec — treat this file as background.
 
 **Product:** CasePilot — a user tells their legal story via chat to a router agent that
 routes to a jurisdiction-specific specialist agent (work, housing, family…), which
