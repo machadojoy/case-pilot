@@ -31,13 +31,21 @@ address an account. Personal details live per-firm (see *Profile* below).
 
 | Value | Means |
 |-------|-------|
-| `pending` | A **lead** — gave an email at intake, has no credentials, cannot authenticate. |
-| `active` | Activated: verified email + password, portal access. |
+| `pending` | A **lead** — email captured at a firm's intake, no credentials, cannot authenticate. |
+| `unverified` | **Signup-first** (firm staff): chose their own password, mailbox not yet proven. Decided 2026-08-26; ships with the auth slice — see `../auth.md`. |
+| `active` | Verified email + password. Full portal access. |
 
-Two values named but **deliberately not built**:
+`pending` and `unverified` look similar and are not: a lead's email was typed in by a
+*third party* at some firm's intake, so it must prove mailbox control **before** it may
+hold a credential. A signup-first user already chose their own password. Two populations,
+two mint paths — DESIGN.md §5.
 
-- `unverified` — signup-first (has a password, mailbox not yet proven). There is no
-  signup-first flow yet.
+**Login eligibility** (decided 2026-08-26): anyone holding a password who is not erased —
+so `unverified` and `active` may log in. `pending` is refused *structurally* rather than
+by a status check, since it has no password to verify against.
+
+One value named but **deliberately not built**:
+
 - `closed` — voluntary account closure. Closure *is* lifecycle (a dormant account whose
   data is intact), which is why it belongs here and erasure does not. Add with the flow.
 
