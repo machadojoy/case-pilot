@@ -56,19 +56,78 @@ Consequences that shape the schema:
   already be Art 9 data, which turns the retention TTL on unclaimed sessions from
   housekeeping into an obligation.
 
-## 3. Identity & membership
+## 3. Identity & roles
 
 - **`User` is scoped to one firm.** ✅ (Q2, 2026-08-26 — **supersedes** the earlier
   global-identity model.) `users` carries `org_id`, and email is unique **per firm**, not
   globally. Someone dealing with two firms has two accounts, like every other B2B portal.
   A person's work account belongs to their employer, and ends when the job does.
-- **`Membership`** — links a `User` to an `Organization` with a **`role`**. Role is
-  contextual to a workspace, so it lives here, not on `User`. ✅ (structure)
-- **Membership means *insider*.** Roles: `owner`, `admin`, `lawyer`, `staff`.
-  ✅ (Q5, 2026-08-20)
-- **`customer` is NOT a role** — the customer relationship is carried by the case:
-  `Dossier(org_id, customer_user_id)`. There is no customer `Membership` row.
-  ✅ (Q5, 2026-08-20)
+- **`role` is a nullable column on `users`.** ✅ (2026-08-26 — **supersedes** the separate
+  `Membership` table.) `owner` / `admin` / `lawyer` / `staff`, or **`NULL` meaning "not
+  staff"**.
+- **`NULL` role = outsider.** A client is not granted a role; they simply have no staff
+  grant. Their relationship to the firm is carried by the case:
+  `Dossier(org_id, customer_user_id)`.
+- **`customer` is NOT a role value, and must never become one.** ✅ (Q5, 2026-08-20)
+
+### Why `role` is a column, not a `Membership` table
+
+Pre-Q2, `Membership` was the *only* thing tying a person to a firm, so it carried
+`(user_id, org_id, role)` and earned its place. Once Q2 put `org_id` on `users`, it
+collapsed to `(user_id, role)` unique on `user_id` — a column pretending to be a table.
+
+The argument for keeping it was that a row which *exists or doesn't* cannot be forgotten
+the way a nullable value can. **That argument does not survive inspection**, and it is
+recorded here so it is not re-invented:
+
+```python
+role = session.exec(select(Membership.role).where(...)).one_or_none()  # -> None
+role = user.role                                                       # -> None
+```
+
+Both yield `None` and both must be handled. More importantly **neither enforces the thing
+that actually matters** — the row-level predicate below. The table never protected against
+the real danger; it only looked like it did.
+
+What the column buys: one less join on *every* authenticated request (and the role arrives
+free, since the user row is already loaded for `sessions_valid_from`); erasure becomes one
+`UPDATE` rather than `UPDATE` + `DELETE`; and "who works here" is
+`WHERE org_id = :org AND role IS NOT NULL`.
+
+### Why `customer` is not a role value
+
+Insider and outsider are not two permission levels, they are two **authorization shapes**:
+
+| | scope predicate |
+|---|---|
+| insider (`role IS NOT NULL`) | `WHERE org_id = :org` — the firm's book of business |
+| outsider (`role IS NULL`) | `WHERE org_id = :org AND customer_user_id = :me` |
+
+**No role check can express that second predicate.** Adding `customer` as a role value
+would leave the row-level constraint living wherever someone remembered to write it — a
+client-list leak waiting to happen. `NULL` fails closed: `role IN ('lawyer', 'staff')`
+excludes it automatically.
+
+Two further reasons:
+
+- **It can't drift.** "joy is a client of this firm" *means* "joy has a case here". A
+  `role = 'customer'` stores that fact a second time, so the two can disagree.
+- **A firm's own employee can be its client.** joy as `lawyer` *and* client is one account
+  with `role = 'lawyer'` plus a `Dossier` where she is the customer. As a role value it
+  would be unrepresentable — she cannot be both `lawyer` and `customer` in one column.
+
+The cost, accepted: authorization has two code paths. They are genuinely two relationships
+— the alternative doesn't remove the second path, it hides it inside the first.
+
+### Revocation closes the account ✅ (2026-08-26)
+
+When someone leaves the firm, **nulling their role is not enough**. It would leave an
+account indistinguishable from a client's — a former employee quietly becoming an outsider
+with a live login. Revocation sets `status = 'closed'`.
+
+The exception: if they are *also* a client of the firm (they have a `Dossier` as
+`customer_user_id`), then nulling the role is exactly right — they stop being staff and
+remain a client.
 
 ### No cross-tenant user API ✅ (2026-08-26, restated after Q2)
 
@@ -77,92 +136,40 @@ rather than by discipline — `users.org_id` means a listing is *already* scoped
 rule is worth keeping explicit, because a `GET /users` that forgets its filter is the
 classic tenancy bug:
 
-| Question | Endpoint | Query over |
+| Question | Endpoint | Query |
 |---|---|---|
 | who am I? | `GET /api/v1/users/me` | the caller's own row |
-| who works at this firm? | `GET /api/v1/organizations/{id}/members` | `Membership` |
+| who works at this firm? | `GET /api/v1/organizations/{id}/members` | `org_id = :org AND role IS NOT NULL` |
 | who are this firm's clients? | (via cases) | `Dossier` |
 
 **Every user query carries `org_id`.** No exceptions — that is the point of Q2.
 
-### Why `customer` is a distinct concept, not a role
-
-Insider and outsider are not two permission levels, they are two **authorization
-shapes**:
-
-| | scope predicate |
-|---|---|
-| insider (has a `Membership`) | `WHERE org_id = :org` — the firm's book of business |
-| outsider (has a `Dossier`) | `WHERE org_id = :org AND customer_user_id = :me` |
-
-No role check can express that second predicate, so folding `customer` into the role
-enum would leave the row-level constraint living wherever someone remembered to write
-it — a client-list leak waiting to happen. Three further reasons:
-
-- **It can't drift.** "joy is a client of firm B" *means* "joy has a case at firm B".
-  A `Membership(customer)` row stores that fact a second time, so it can disagree.
-- **A firm's own employee can be its client.** joy as `lawyer` *and* client at firm A
-  is one `Membership` + one `Dossier`. As two membership rows it breaks the natural
-  `user_id` unique key, and "what is this person's role here?" degrades from a
-  value into a set that every authz check has to loop over.
-- **Outsider access becomes structural.** You cannot accidentally grant org-wide scope
-  to someone with no `Membership` row; the absence of the row *is* the guarantee.
-
-The cost, accepted: authorization has two code paths. They are genuinely two
-relationships — the alternative doesn't remove the second path, it hides it inside the
-first.
-
-(The cross-firm *union* query this used to need died with Q2: there is no aggregate view,
-so every question is already scoped to one firm.)
-
-### `Membership` after Q2 — deliberately kept, though it looks redundant
-
-With `org_id` on `users`, a `Membership` collapses to `(user_id, role)` — unique on
-`user_id`, one meaningful column. That is a column pretending to be a table, and it is a
-fair thing to challenge. **Recommendation: keep the table anyway.** 🔷
-
-The insider/outsider boundary is the most security-sensitive line in the system, and a
-row that *exists or doesn't* cannot be forgotten the way a nullable value can. Collapsing
-to `users.role IS NULL` means a client is defined by the absence of a value rather than the
-absence of a grant, and it invites someone later to "tidy up" by adding `customer` as a
-role value — reintroducing exactly what Q5 rejected.
-
-The honest counter-argument: SQL NULL semantics already fail closed (`role IN (...)`
-excludes NULL), the join costs a query, and one fewer table is one fewer thing. If a
-reviewer prefers the collapse, the reasoning above is the thing to argue with — not
-inertia from the pre-Q2 design.
-
 ### Teams — decided direction, built with `Dossier` ✅ (2026-08-26)
 
-Firms have teams, and people hold roles *within* them. That is the target model. It does
-**not** replace `Membership`; it adds a second axis on top:
+Firms have teams, and people hold roles *within* them. That is the target model, and it is
+a **second axis** on top of the org role, not a replacement:
 
-| Level | Answers | Values |
-|-------|---------|--------|
-| `Membership(user, role)` | what you **are** at this firm | `owner` / `admin` / `lawyer` / `staff` |
-| `TeamMembership(user, team, role)` | what you **do** on this team | `lead` / `member` |
+| Level | Answers | Where | Values |
+|-------|---------|-------|--------|
+| org role | what you **are** at this firm | `users.role` | `owner` / `admin` / `lawyer` / `staff` |
+| team role | what you **do** on this team | `TeamMembership(user, team, role)` | `lead` / `member` |
 
-A **team lead is `Membership(role=lawyer)` + `TeamMembership(role=lead)`** — still a
-lawyer, which the flat model could not express. Being a lawyer is a professional fact
-about the person, firm-wide; leading is a fact about one team. You do not stop being a
+A **team lead is `users.role = 'lawyer'` + `TeamMembership(role='lead')`** — still a
+lawyer, which a flat single-role model could not express. Being a lawyer is a professional
+fact about the person, firm-wide; leading is a fact about one team. You do not stop being a
 lawyer in another team.
 
-**Do not fold `lead` into the role enum.** That was considered and rejected: it starts a
+The asymmetry (one a column, the other a table) is honest: you have exactly one org and
+possibly many teams.
+
+**Do not fold `lead` into the role column.** That was considered and rejected: it starts a
 slide toward a job-title list (`senior_partner`, `paralegal_supervisor`…) which is not a
-permission model, and it would force either a `team_lead` role that loses `lawyer`, or
-set-valued roles that break the `user_id` unique key and turn every authz check
-into a loop.
-
-Three things this preserves, which is why `Membership` needs no rework:
-
-- the flat role set of Q5 stays correct;
-- the `user_id` unique constraint stays correct — no role sets;
-- org-level membership survives regardless, because someone must own the firm and
-  administer billing even in a two-person firm with no teams.
+permission model, and it would force either a `team_lead` role that loses `lawyer`, or a
+set-valued role column that turns every authz check into a loop.
 
 **Sequencing:** built alongside `Dossier`, not before. Teams organise *work*, and until
-assignment exists there is nothing to check the structure against. Waiting costs nothing
-— the decomposition above is additive.
+assignment exists there is nothing to check the structure against. Waiting costs nothing —
+the decomposition above is additive.
 
 Open when it is built, all better answered with a `Dossier` in front of us:
 
@@ -176,8 +183,8 @@ Open when it is built, all better answered with a `Dossier` in front of us:
 
 Note also that `dossiers` currently has **no assignee column at all** — §6 escalates to a
 human without saying which one. `assigned_to_user_id` (nullable FK) is the minimum, plus
-an app-level check that the assignee has a `Membership` in the same org; Postgres cannot
-express that as a plain FK.
+an app-level check that the assignee is staff at the same firm (`org_id` matches,
+`role IS NOT NULL`); Postgres cannot express that as a plain FK.
 
 ## 4. Customer experience (portal)
 
@@ -294,7 +301,7 @@ customize their own case types? ❓
 ## 8. Lawyer entity — superseded
 
 PHASE1's standalone `Lawyer` reference table is replaced: **lawyers are `User`s with
-`Membership(role=lawyer)`** in a firm's workspace, plus a possible `LawyerProfile`
+`users.role = 'lawyer'`** in a firm's workspace, plus a possible `LawyerProfile`
 (jurisdictions, bar #) later. ✅ (direction) / ⏳ (profile)
 
 ## 9. Deferred seams (don't build now; don't preclude)
@@ -327,7 +334,9 @@ PHASE1's standalone `Lawyer` reference table is replaced: **lawyers are `User`s 
    (`pending`) → activated (`active`). Decided 2026-08-20; see §5.
 4. ✅ Primary keys: **UUID everywhere** (decided 2026-08-13).
 5. ✅ Roles are `owner` / `admin` / `lawyer` / `staff`; **`customer` is a distinct
-   concept**, carried by `Dossier.customer_user_id`, not a `Membership` row.
+   concept**, carried by `Dossier.customer_user_id`, never a role value. Role lives on
+   `users.role` (nullable; NULL = not staff) — the `Membership` table was collapsed into
+   it on 2026-08-26, see §3.
    Decided 2026-08-20; see §3.
 6. ❓ `Jurisdiction`/`CaseType`: global vs per-firm.
 
@@ -338,8 +347,7 @@ PHASE1's standalone `Lawyer` reference table is replaced: **lawyers are `User`s 
 
 ```
 Organization (tenant) ──< User (org-scoped account; email unique per firm)
-                              │
-                              ├──< Membership (role)  insiders only — absence = outsider
+                              │      role: owner|admin|lawyer|staff, or NULL = client
                               └──< Dossier.customer_user_id   the client link
 
 Organization ──< Dossier (case)                (full ER diagram: docs/schema.md)
@@ -350,5 +358,5 @@ Dossier ── CaseType ── Jurisdiction            (reference data; global?)
 
 ## Build order
 
-Tenant root first: **Organization → User → Membership → (Jurisdiction/CaseType) →
+Tenant root first: **Organization → User (carries `role`) → (Jurisdiction/CaseType) →
 Dossier**. Detailed per-model designs live in `docs/models/`.

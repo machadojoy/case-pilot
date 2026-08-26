@@ -5,7 +5,7 @@
 ## Purpose
 
 The **tenant root**. One row per law-firm workspace. Every tenant-scoped table carries its
-`org_id`. Created when a firm signs up; the first user becomes its `owner` (via `Membership`).
+`org_id`. Created when a firm signs up; the first user is created with it, as its `owner`.
 
 ## Fields (decided)
 
@@ -22,12 +22,14 @@ The **tenant root**. One row per law-firm workspace. Every tenant-scoped table c
 - `status` / suspended — add with a real suspension flow.
 - `plan` / billing tier — Phase 5.
 - `settings` / triage policy — its own entity later.
-- `owner_id` — **derive** from `Membership(role=owner)`; don't duplicate identity here.
+- `owner_id` — **derive** from `users.role = 'owner'`; don't duplicate identity here.
 
 ## Creation is transactional (behavior, not a field)
 
-Signing up a firm creates — atomically — the `Organization` **+** the owner `User` **+** a
-`Membership(role=owner)`. All-or-nothing.
+Signing up a firm creates — atomically — the `Organization` **+** its owner
+`User(role='owner')`. All-or-nothing. Since Q2 an account cannot exist without an
+`org_id`, so this is not a convenience: it is the only way the first user can exist.
+`role` was a separate `Membership` table until 2026-08-26.
 
 ## Endpoints — and the two that are deliberately missing
 
@@ -46,9 +48,9 @@ doesn't read as an oversight.
 
 Only `name` is mutable; `slug` is the stable handle and renaming it breaks every existing
 link (see below). So `PATCH` is a one-field endpoint, and what it actually needs is an
-answer to *"who may rename this firm?"* — `owner`/`admin` only, which is a `Membership`
-query. Shipping it before `Membership` would let anyone on the internet rename anyone's
-firm: strictly worse than today, where they can only create and read.
+answer to *"who may rename this firm?"* — `owner`/`admin` only, which is a check on
+`users.role`. Shipping it before authorization exists would let anyone on the internet
+rename anyone's firm: strictly worse than today, where they can only create and read.
 
 Ship it with the slice that fixes the two existing endpoints (`POST` is unauthenticated;
 `GET` lists every firm in the system to everyone).
@@ -56,7 +58,7 @@ Ship it with the slice that fixes the two existing endpoints (`POST` is unauthen
 ### `DELETE` — not a Phase 1 feature at all
 
 Deleting an `Organization` means deleting a **tenant**: its `Dossier`s — legal case
-files — and every `Membership`. Per DESIGN.md §2a the firm is its own data controller with
+files — and every account in it. Per DESIGN.md §2a the firm is its own controller with
 its own retention obligation, and those files are exactly what GDPR Art 17(3)(b) protects.
 A hard `DELETE` is not a feature; it is a way to destroy records someone is legally
 required to keep.
@@ -82,4 +84,4 @@ history that does not end when the firm's subscription does.
 
 - Slug generation: `slugify(name)` + a collision suffix if taken (e.g. `-2`).
 - Slug *changes* (rename) are a deliberate later feature (they break old links).
-- `PATCH` and closure, per the section above — both gated on `Membership`.
+- `PATCH` and closure, per the section above — both gated on authorization.

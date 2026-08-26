@@ -18,7 +18,7 @@ Self-study full-stack project for learning FastAPI, React+TS, gRPC, and system d
 | `PHASE1.md` | The original brief | **historical** — superseded by `DESIGN.md` |
 
 ⚠️ **`PHASE1.md` is not the plan.** The domain was reframed on 2026-08-13 (multi-tenant
-SaaS, global identity + `Membership`, AI triage) and `DESIGN.md` supersedes its data model,
+SaaS, per-firm accounts carrying a role, AI triage) and `DESIGN.md` supersedes its data model,
 endpoint list and library choices. Treat `PHASE1.md` as background, never as a spec.
 
 ## How the human wants to work

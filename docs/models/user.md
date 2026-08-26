@@ -27,6 +27,7 @@ not the account (see *Profile* below).
 | `org_id` | UUID | FK → `organizations.id`. The firm this account belongs to. Added by Q2. |
 | `email` | str | Unique **per firm** — `(org_id, lower(email))`, not globally. The same address at two firms is two unrelated accounts. The identity anchor within a workspace. Lowercased on write — `Joy@x.com` and `joy@x.com` are one mailbox, and without normalisation the lead flow's find-or-create silently forks the account. **Do not** strip plus-addressing or dots: `joy+firmb@x.com` is a genuinely different mailbox. |
 | `hashed_password` | str \| **None** | Null for leads — they have no credentials and cannot log in. pwdlib/bcrypt. |
+| `role` | str \| None + CHECK | `owner` \| `admin` \| `lawyer` \| `staff`, or **`NULL` = not staff** (a client). See *Roles* below. Was a separate `Membership` table until 2026-08-26. |
 | `full_name` | str \| None | **Display only, unverified.** One field, not first/last: name structure varies enormously across cultures (mononyms, multiple family names, varying order) and splitting buys nothing we use. Null for leads, who arrive with an email and nothing else. The *verified* legal name is per-firm. |
 | `status` | str + CHECK | `pending` \| `unverified` \| `active`. Stored as a **string with a CHECK constraint**, not a PG enum — see *Why not a native enum*. |
 | `email_verified_at` | datetime \| None | Proof of **mailbox control** — what makes the account usable, as opposed to attested facts *about* the person, which belong to the case. |
@@ -56,9 +57,50 @@ One value named but **deliberately not built**:
 - `closed` — voluntary account closure. Closure *is* lifecycle (a dormant account whose
   data is intact), which is why it belongs here and erasure does not. Add with the flow.
 
-`suspended` is **not** planned here: a firm never suspends a `User`, it deletes the
-`Membership`. Suspension would be a platform-level action, and there is no platform-admin
-concept.
+`suspended` is **not** planned: a firm revoking someone sets `closed` (see *Revocation*
+below). A platform-level suspension would be a different thing, and there is no
+platform-admin concept.
+
+### Roles
+
+| Value | Means |
+|-------|-------|
+| `owner` | Owns the firm. **At least one per organization**, always. |
+| `admin` | Administers the workspace. |
+| `lawyer` | Does legal work; can be assigned cases. |
+| `staff` | Works at the firm, not a lawyer. |
+| **`NULL`** | **Not staff** — a client. Not a grant, just the absence of one. |
+
+**`customer` is not a value and must never become one** (DESIGN.md §10 Q5). Insider and
+outsider are different *authorization shapes*: an insider is scoped
+`WHERE org_id = :org`, an outsider `WHERE org_id = :org AND customer_user_id = :me`. No
+role check can express the second, so a `customer` value would leave the row-level
+constraint living wherever someone remembered to write it. `NULL` fails closed —
+`role IN ('lawyer', 'staff')` excludes it automatically.
+
+It also keeps the firm's-own-employee-is-a-client case representable: `role = 'lawyer'`
+plus a `Dossier` where she is the customer. As a role *value* she could not be both.
+
+`role` gets the same `str` + CHECK treatment as `status`, and the reasoning is stronger —
+roles churn more than statuses. Generate the constraint from the `StrEnum`.
+
+### Rules to enforce when the endpoints exist
+
+None of these can be violated yet — there is no role-change or revocation endpoint — so
+they are recorded now and enforced when each lands.
+
+- **At least one `owner` per organization.** An org with zero owners is orphaned and
+  unadministrable. This is a cross-row constraint: **Postgres does not guarantee it**, and
+  a simple `CHECK` cannot express it. Enforce in the service, and do not let a future
+  reader assume the database has it covered. A firm may have several owners
+  (co-founders), which is why the invariant is *at least* one.
+- **No self-role-change.** An `admin` promoting themselves to `owner` is privilege
+  escalation.
+- **Revocation closes the account.** When someone leaves, `role = NULL` is *not enough* —
+  it leaves an account indistinguishable from a client's, so a former employee keeps a
+  live login as an outsider. Set `status = 'closed'`. **Exception:** if they are also a
+  client of the firm (they appear as `customer_user_id` on a `Dossier`), null the role and
+  keep the account — they stop being staff and remain a client.
 
 ### Why not a native enum
 
