@@ -78,7 +78,7 @@ erDiagram
 |-------|-------|
 | `organizations` | ✅ shipped — 3 endpoints under `/api/v1` |
 | `users` | ✅ shipped — no endpoints yet (auth slice is spec'd, see `auth.md`) |
-| `memberships` | ⏳ designed, not built — next after auth |
+| `memberships` | ⏳ designed (`models/membership.md`), not built — next after auth |
 | `jurisdictions` / `case_types` | ❌ blocked on DESIGN.md §10 **Q6** (global taxonomy vs per-firm) |
 | `dossiers` | ❌ blocked on `memberships` + reference data |
 
@@ -128,4 +128,10 @@ Deliberate omissions, each with a home elsewhere:
   `dossiers`. See `models/user.md`; the snapshot mechanics are still undesigned.
 - **Anonymous chat sessions** (`user_id NULL`) and transcripts — DESIGN.md §9.
 - **`Invitation`** — needed before a second person can join a firm; drags in email.
+- **`Team` / `TeamMembership`** — the decided direction (DESIGN.md §3), built with
+  `dossiers`. A *second axis* on top of `memberships`, not a replacement: a team lead is
+  `Membership(role=lawyer)` + `TeamMembership(role=lead)`.
+- **`dossiers.assigned_to_user_id`** — the schema above has **no assignee column**, so
+  nothing yet records which lawyer works a case. §6 escalates to "a human" without saying
+  which. Needed when `dossiers` is designed.
 - Agent assessments/decisions, engagement, payments, `LawyerProfile` — DESIGN.md §9.

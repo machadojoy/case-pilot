@@ -117,6 +117,53 @@ UNION
 SELECT DISTINCT org_id FROM dossiers WHERE customer_user_id = :me  -- firms I'm a client of
 ```
 
+### Teams — decided direction, built with `Dossier` ✅ (2026-08-26)
+
+Firms have teams, and people hold roles *within* them. That is the target model. It does
+**not** replace `Membership`; it adds a second axis on top:
+
+| Level | Answers | Values |
+|-------|---------|--------|
+| `Membership(user, org, role)` | what you **are** at this firm | `owner` / `admin` / `lawyer` / `staff` |
+| `TeamMembership(user, team, role)` | what you **do** on this team | `lead` / `member` |
+
+A **team lead is `Membership(role=lawyer)` + `TeamMembership(role=lead)`** — still a
+lawyer, which the flat model could not express. Being a lawyer is a professional fact
+about the person, firm-wide; leading is a fact about one team. You do not stop being a
+lawyer in another team.
+
+**Do not fold `lead` into the role enum.** That was considered and rejected: it starts a
+slide toward a job-title list (`senior_partner`, `paralegal_supervisor`…) which is not a
+permission model, and it would force either a `team_lead` role that loses `lawyer`, or
+set-valued roles that break the `(user_id, org_id)` unique key and turn every authz check
+into a loop.
+
+Three things this preserves, which is why `Membership` needs no rework:
+
+- the flat role set of Q5 stays correct;
+- the `(user_id, org_id)` unique constraint stays correct — no role sets;
+- org-level membership survives regardless, because someone must own the firm and
+  administer billing even in a two-person firm with no teams.
+
+**Sequencing:** built alongside `Dossier`, not before. Teams organise *work*, and until
+assignment exists there is nothing to check the structure against. Waiting costs nothing
+— the decomposition above is additive.
+
+Open when it is built, all better answered with a `Dossier` in front of us:
+
+- **Are teams optional?** A two-person firm has none — so either every query carries a
+  no-team path, or a default team is auto-created that serves nobody.
+- **Is a case assigned to a person, a team, or both?** Probably both: owned by a team,
+  worked by a person.
+- **Cross-team visibility** — can a lawyer in team A see team B's cases? This is the
+  expensive one: it turns scoping from `WHERE org_id = :org` into a three-level check.
+- **Do teams nest?** Recommendation: no, ever.
+
+Note also that `dossiers` currently has **no assignee column at all** — §6 escalates to a
+human without saying which one. `assigned_to_user_id` (nullable FK) is the minimum, plus
+an app-level check that the assignee has a `Membership` in the same org; Postgres cannot
+express that as a plain FK.
+
 ## 4. Customer experience (portal)
 
 - **One CasePilot login, many workspaces, a switcher.** A customer with cases at two firms

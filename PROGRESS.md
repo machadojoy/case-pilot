@@ -206,26 +206,31 @@ both need `Membership`).
 
 ---
 
-**`Membership` — the slice *after* auth. Design it first.** Unlike `User`, there is **no `docs/models/membership.md`** — write it before any code
-(step 1 of the `add-model` skill). The central question is already locked, so this
-should be a short design, not another multi-session one:
+**`Membership` — the slice *after* auth.** Design is **done**:
+`docs/models/membership.md` (written 2026-08-26). Scope is deliberately small — rows are
+created only by the org-creation flow, granting the creator `owner`; no invitations, no
+member list, no removal. That still closes the live leak on `GET /organizations` and makes
+`POST /organizations` authorizable. Key points:
 
-- **DESIGN.md §10 Q5 is decided**: roles are `owner` / `admin` / `lawyer` / `staff`, and
-  **`customer` is not a role** — that relationship is carried by
-  `Dossier.customer_user_id`. A firm's own employee can be its client, which two
-  `Membership` rows cannot express without breaking the `(user, org)` key.
-- Shape is presumably `(user_id, org_id, role)` with a unique constraint on
-  `(user_id, org_id)`, plus the usual UUID PK and timestamps.
-- **`role` gets the same `str` + CHECK treatment as `User.status`** — same reasoning
-  (`table=True` kills validation; Postgres has no `ALTER TYPE ... DROP VALUE`), and
-  roles are *more* likely to churn than statuses. Generate it from a `StrEnum`.
-- Worth deciding explicitly in the doc: **revocation is a hard `DELETE`, not a
-  tombstone.** `docs/models/user.md` already flags this as the counter-example to
-  `User`'s erasure — a tombstoned membership would occupy the `(user, org)` unique slot
-  forever and block re-adding someone who once left.
-- Open and *not* blocking the table: how someone is invited (`pending` membership vs a
-  separate `Invitation`), and whether the FK to `users` needs `ON DELETE` at all —
-  §2a says **never cascade** from `users` into tenant data.
+- Shape: `(id, user_id, org_id, role)` + timestamps. **Unique on `(user_id, org_id)`.**
+  Nothing else — no `invited_by`, no `status`.
+- **`role` is `str` + CHECK** generated from a `StrEnum`, same as `User.status`, and the
+  reasoning is stronger here because roles churn more. Autogenerate **cannot see CHECK
+  changes** — hand-write it and prove it with `\d memberships`.
+- **Revocation is a hard `DELETE`**, never a tombstone — a tombstone would occupy the
+  `(user_id, org_id)` unique slot and block re-adding someone who left. This is the
+  deliberate counter-example to `User`'s erasure.
+- **Erasing a `User` deletes their memberships** — a tombstone with a live membership is a
+  ghost employee with access. Not a contradiction of §2a: a membership is an *access
+  grant*, a `Dossier` is a *legal record*. Grants go, records stay. The FK still must not
+  be `ON DELETE CASCADE`.
+- Recorded but not enforceable yet (no removal/role-change endpoints exists): **≥1 owner
+  per org** (service-level — Postgres cannot express it, so don't assume it does) and
+  **no self-role-change**.
+- **Teams don't change this table.** DESIGN.md §3 records `Team`/`TeamMembership` as the
+  decided direction, built with `Dossier` — a second axis, not a replacement. A team lead
+  is `Membership(role=lawyer)` + `TeamMembership(role=lead)`. Do **not** add `lead` to
+  this enum or drop the unique constraint in anticipation.
 
 Then build it with the `add-model` skill.
 
