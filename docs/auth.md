@@ -1,8 +1,8 @@
 # Auth slice — register / login / me
 
-> Status: **designed 2026-08-26; reshaped the same day by Q2** (per-firm accounts).
-> The slice is now bigger than "register/login/me" — see *What Q2 changed*. Build spec,
-> but the scope change wants your sign-off first. 🔷
+> Status: **designed 2026-08-26; reshaped the same day by Q2** (per-firm accounts), then
+> back down again when `Membership` collapsed into `users.role`. Still three endpoints.
+> One item awaits sign-off: the org-context mechanism (`org_slug` in the body). 🔷
 > Depends on `User` (shipped, PR #14). See `models/user.md` and `../DESIGN.md` §3, §5.
 
 ## Why this slice exists at all
