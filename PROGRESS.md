@@ -245,6 +245,11 @@ Deferred, worth doing when convenient (small, independent):
     time), which makes pages repeat or skip rows.
   - `col()` from sqlmodel when passing model attributes to `order_by` — SQLModel types
     them as their value type, so `ty` rejects them as sort keys otherwise.
+  - **`User` is looked up, never enumerated.** The only global user endpoint is
+    `GET /api/v1/users/me`; there is no `GET /api/v1/users`, because a global listing
+    would expose every firm's client base. Anything that pages through people belongs to
+    a tenant-scoped resource carrying `org_id` (staff → `Membership`, clients →
+    `Dossier`). See DESIGN.md §3.
 - `tests/conftest.py` imports the FastAPI app **aliased** (`app as fastapi_app`) because
   the bare name `app` is the package. Don't "simplify" that back.
 - Local infra must be running for Docker/k8s work: `colima start`, then

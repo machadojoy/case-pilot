@@ -5,6 +5,12 @@
 > Weekend project. Build a **modular monolith first**; extract the agents layer into its
 > own service later (Phase 4) to feel *why* you'd split a monolith.
 
+> **⚠️ Read `DESIGN.md` first.** This file is the original brief and is **superseded**
+> by `DESIGN.md` wherever they differ — the domain was reframed on 2026-08-13 into a
+> multi-tenant SaaS (workspace per firm, global identity + `Membership`, AI triage
+> instead of a human intake clerk). The data model and the endpoint list below predate
+> that. Per-model detail lives in `docs/models/`.
+
 **Product:** CasePilot — a user tells their legal story via chat to a router agent that
 routes to a jurisdiction-specific specialist agent (work, housing, family…), which
 classifies the case type and prepares a dossier.
@@ -73,6 +79,12 @@ Each backend module keeps the shape `model / schema / router / service` so it's
 ---
 
 ## API endpoints
+
+> **Superseded — see `DESIGN.md` §3 and §5.** Two changes in particular:
+> `POST /auth/register` does **not** survive (progressive identity: intake mints a lead,
+> activation proves mailbox control *then* sets a password), and there is deliberately
+> **no** global `GET /users` (it would expose every firm's client base). Routes are also
+> mounted under `/api/v1`, and `Dossier.user_id` is now `customer_user_id` + `org_id`.
 
 - `POST /auth/register`, `POST /auth/login` (returns JWT), `GET /auth/me`
 - `GET /jurisdictions`, `GET /case-types` (optionally `?jurisdiction_id=`)
