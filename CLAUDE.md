@@ -12,6 +12,7 @@ Self-study full-stack project for learning FastAPI, React+TS, gRPC, and system d
 |-----|---------|-----------|
 | `PROGRESS.md` | Where are we, what's next, what will bite me? | **entry point** — current |
 | `DESIGN.md` | What are we building and why? Domain, tenancy, identity. | **source of truth** for the domain |
+| `docs/schema.md` | The ER diagram — every table, column and FK | current |
 | `docs/models/*.md`, `docs/auth.md` | Per-slice detail: every field and endpoint, with reasoning | current |
 | `CLAUDE.md` (this file) | How we work — conventions, workflow, commands | current |
 | `PHASE1.md` | The original brief | **historical** — superseded by `DESIGN.md` |
