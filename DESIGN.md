@@ -25,39 +25,43 @@ firm-configured policy — auto-accept/decline or escalate edge cases to a human
 - **Isolation:** shared database, shared schema, `org_id` on every tenant-scoped row,
   reinforced with **Postgres Row-Level Security (RLS)** so the DB itself refuses
   cross-tenant reads (defense-in-depth on sensitive legal data). 🔷
-- **Two planes:** *identity plane (global)* = `User`; *data plane (per-tenant)* =
-  everything else, carrying `org_id`.
+- **No exceptions: `org_id` on every table, `users` included.** ✅ (Q2, 2026-08-26)
+  An earlier design made `User` a *global* identity plane sitting outside tenancy; that is
+  **superseded**. One uniform rule means RLS has one policy shape rather than a special
+  case for the one table that broke it.
 
-## 2a. Data protection: who controls what
+## 2a. Data protection: CasePilot holds no cross-tenant data
 
-CasePilot and its firms are **different data controllers**, and this is structural, not
-paperwork. ✅ (2026-08-21)
+**Every row belongs to exactly one firm, so CasePilot is a pure processor.** ✅ (Q2,
+2026-08-26) The firm is the controller of its own workspace — including its users'
+accounts. There is no platform-level personal-data holding to be controller *of*.
 
-| Plane | Controller | Erasure on request? |
-|-------|-----------|---------------------|
-| identity (`User`) | **CasePilot** | yes — anonymise in place, see `docs/models/user.md` |
-| data (`Dossier`, attested profile) | **each firm, independently** | often **must be refused** — GDPR Art 17(3)(b), retention for legal claims |
+This was not true under the superseded global-identity design, where the platform held a
+cross-firm map of who was litigating where. Law firms run vendor due diligence, and "we
+never hold data across our clients" is a materially easier answer than "we do, but we
+don't show it to anyone."
 
 Consequences that shape the schema:
 
-- **Erasing a `User` does not erase the person.** The account is anonymised; each firm's
-  case file is governed by that firm's own retention obligation. A subject access or
-  erasure request fans out to CasePilot *and* to every firm separately.
-- **No `ON DELETE CASCADE` from `users` to tenant data** — ever. An identity-plane
-  erasure must not be able to destroy a firm's legal records.
-- **Attested personal details are per-firm** — for privacy (§4) *and* because retention
-  periods differ per firm, so a global profile row would have no single lawful lifetime.
+- **An erasure or subject-access request goes to the firm**, not to CasePilot, and one
+  firm's answer has no bearing on another's. Retention is that firm's obligation
+  (GDPR Art 17(3)(b) commonly *requires* refusal for live legal matters).
+- **Deleting a `User` still never cascades to `dossiers`.** Erasure anonymises the account
+  in place; the case file survives because the firm is obliged to keep it. See
+  `docs/models/user.md`.
 - **Special-category data is effectively unavoidable.** Housing, family and employment
   matters routinely contain health, ethnicity or criminal-offence data — GDPR **Art 9**,
   a stricter regime than ordinary PII. The applicable condition is Art 9(2)(f), legal
-  claims. Note this bites *before* anyone has an account: an anonymous intake transcript
-  may already be Art 9 data, which turns the retention TTL on unclaimed sessions from
+  claims. This bites *before* anyone has an account: an anonymous intake transcript may
+  already be Art 9 data, which turns the retention TTL on unclaimed sessions from
   housekeeping into an obligation.
 
 ## 3. Identity & membership
 
-- **`User`** — global identity/account; email **globally unique**. Never org-scoped:
-  one human is one `User` no matter how many firms they touch. ✅ (Q3, 2026-08-20)
+- **`User` is scoped to one firm.** ✅ (Q2, 2026-08-26 — **supersedes** the earlier
+  global-identity model.) `users` carries `org_id`, and email is unique **per firm**, not
+  globally. Someone dealing with two firms has two accounts, like every other B2B portal.
+  A person's work account belongs to their employer, and ends when the job does.
 - **`Membership`** — links a `User` to an `Organization` with a **`role`**. Role is
   contextual to a workspace, so it lives here, not on `User`. ✅ (structure)
 - **Membership means *insider*.** Roles: `owner`, `admin`, `lawyer`, `staff`.
@@ -66,23 +70,20 @@ Consequences that shape the schema:
   `Dossier(org_id, customer_user_id)`. There is no customer `Membership` row.
   ✅ (Q5, 2026-08-20)
 
-### No tenant-agnostic user API ✅ (2026-08-26)
+### No cross-tenant user API ✅ (2026-08-26, restated after Q2)
 
-The **only** global-plane user endpoint is `GET /api/v1/users/me`.
+There is no endpoint that pages across firms. Since Q2 this is enforced by the schema
+rather than by discipline — `users.org_id` means a listing is *already* scoped — but the
+rule is worth keeping explicit, because a `GET /users` that forgets its filter is the
+classic tenancy bug:
 
-There is no `GET /api/v1/users`. A global listing would expose every firm's client base
-to anyone authenticated — the exact inverse of §4's privacy property. Everything about
-*other* people is reached through org scope, never through `User`:
-
-| Question | Endpoint | Really a query over |
+| Question | Endpoint | Query over |
 |---|---|---|
-| who am I? | `GET /api/v1/users/me` | `User` (the one global read) |
+| who am I? | `GET /api/v1/users/me` | the caller's own row |
 | who works at this firm? | `GET /api/v1/organizations/{id}/members` | `Membership` |
 | who are this firm's clients? | (via cases) | `Dossier` |
 
-The rule to hold onto: **`User` is looked up by identity, never enumerated.** If an
-endpoint would let you page through people, it belongs to a tenant-scoped resource and
-must carry `org_id`.
+**Every user query carries `org_id`.** No exceptions — that is the point of Q2.
 
 ### Why `customer` is a distinct concept, not a role
 
@@ -102,20 +103,34 @@ it — a client-list leak waiting to happen. Three further reasons:
   A `Membership(customer)` row stores that fact a second time, so it can disagree.
 - **A firm's own employee can be its client.** joy as `lawyer` *and* client at firm A
   is one `Membership` + one `Dossier`. As two membership rows it breaks the natural
-  `(user, org)` unique key, and "what is this person's role here?" degrades from a
+  `user_id` unique key, and "what is this person's role here?" degrades from a
   value into a set that every authz check has to loop over.
 - **Outsider access becomes structural.** You cannot accidentally grant org-wide scope
   to someone with no `Membership` row; the absence of the row *is* the guarantee.
 
-The cost, accepted: the workspace switcher is a union rather than one query, and
-authorization has two code paths. They are genuinely two relationships — the
-alternative doesn't remove the second path, it hides it inside the first.
+The cost, accepted: authorization has two code paths. They are genuinely two
+relationships — the alternative doesn't remove the second path, it hides it inside the
+first.
 
-```sql
-SELECT org_id FROM memberships WHERE user_id = :me          -- firms I work at
-UNION
-SELECT DISTINCT org_id FROM dossiers WHERE customer_user_id = :me  -- firms I'm a client of
-```
+(The cross-firm *union* query this used to need died with Q2: there is no aggregate view,
+so every question is already scoped to one firm.)
+
+### `Membership` after Q2 — deliberately kept, though it looks redundant
+
+With `org_id` on `users`, a `Membership` collapses to `(user_id, role)` — unique on
+`user_id`, one meaningful column. That is a column pretending to be a table, and it is a
+fair thing to challenge. **Recommendation: keep the table anyway.** 🔷
+
+The insider/outsider boundary is the most security-sensitive line in the system, and a
+row that *exists or doesn't* cannot be forgotten the way a nullable value can. Collapsing
+to `users.role IS NULL` means a client is defined by the absence of a value rather than the
+absence of a grant, and it invites someone later to "tidy up" by adding `customer` as a
+role value — reintroducing exactly what Q5 rejected.
+
+The honest counter-argument: SQL NULL semantics already fail closed (`role IN (...)`
+excludes NULL), the join costs a query, and one fewer table is one fewer thing. If a
+reviewer prefers the collapse, the reasoning above is the thing to argue with — not
+inertia from the pre-Q2 design.
 
 ### Teams — decided direction, built with `Dossier` ✅ (2026-08-26)
 
@@ -124,7 +139,7 @@ Firms have teams, and people hold roles *within* them. That is the target model.
 
 | Level | Answers | Values |
 |-------|---------|--------|
-| `Membership(user, org, role)` | what you **are** at this firm | `owner` / `admin` / `lawyer` / `staff` |
+| `Membership(user, role)` | what you **are** at this firm | `owner` / `admin` / `lawyer` / `staff` |
 | `TeamMembership(user, team, role)` | what you **do** on this team | `lead` / `member` |
 
 A **team lead is `Membership(role=lawyer)` + `TeamMembership(role=lead)`** — still a
@@ -135,13 +150,13 @@ lawyer in another team.
 **Do not fold `lead` into the role enum.** That was considered and rejected: it starts a
 slide toward a job-title list (`senior_partner`, `paralegal_supervisor`…) which is not a
 permission model, and it would force either a `team_lead` role that loses `lawyer`, or
-set-valued roles that break the `(user_id, org_id)` unique key and turn every authz check
+set-valued roles that break the `user_id` unique key and turn every authz check
 into a loop.
 
 Three things this preserves, which is why `Membership` needs no rework:
 
 - the flat role set of Q5 stays correct;
-- the `(user_id, org_id)` unique constraint stays correct — no role sets;
+- the `user_id` unique constraint stays correct — no role sets;
 - org-level membership survives regardless, because someone must own the firm and
   administer billing even in a two-person firm with no teams.
 
@@ -166,11 +181,19 @@ express that as a plain FK.
 
 ## 4. Customer experience (portal)
 
-- **One CasePilot login, many workspaces, a switcher.** A customer with cases at two firms
-  signs in once and sees both; each case's data stays isolated in its firm's workspace. 🔷
-- **Privacy property (falls out for free):** the customer sees the aggregate; each firm
-  sees only its own slice — a firm can't tell the customer has cases elsewhere. ✅
-- Per-firm branded domains/subdomains are cosmetic and later; still one identity. ⏳
+- **One account per firm.** ✅ (Q2, 2026-08-26) A customer with matters at two firms signs
+  in separately at each. This is the ordinary shape for a portal you visit occasionally —
+  your bank, your utility, your doctor — and a legal matter is exactly that.
+- **No workspace switcher, no aggregate view.** Explicitly rejected; see §10 Q2 for the
+  option that was considered and why it lost.
+- **Privacy is now structural, not a property to maintain.** A firm cannot tell whether
+  its client has matters elsewhere because *no link exists* — not because we are careful
+  not to expose it. Nor can the platform.
+- **The reverse is available later and is additive:** an optional `person_id` linking rows
+  a customer chooses to connect would make a switcher an opt-in feature. Going the other
+  way — global identity split back into per-firm rows — is a teardown. This is why Q2 went
+  the reversible direction. ⏳
+- Per-firm branded domains/subdomains are cosmetic and later. ⏳
 
 ## 5. Intake funnel & case lifecycle
 
@@ -209,6 +232,11 @@ Discover (firm's intake) → Tell story + email (lead)
   A firm owner never comes through intake — intake is for *their* clients. So
   `POST /auth/register` does exist, but only as the **firm-side** path; it is emphatically
   not how a customer becomes a user.
+
+  Since Q2, both paths mint a `User` **inside one firm**. The same email at two firms is
+  two unrelated rows, so there is no cross-firm find-or-create and no way to probe whether
+  someone holds an account elsewhere. Within a single firm the non-revealing response rule
+  still applies: firm A's intake must not disclose that firm A already knows this email.
 
   **`pending` ≠ `unverified`, and the difference is the whole point.** A lead is
   powerless because its email was supplied by a third party, so activation must be "prove
@@ -285,9 +313,16 @@ PHASE1's standalone `Lawyer` reference table is replaced: **lawyers are `User`s 
 ## 10. Open questions to lock
 
 1. ❓ Isolation: confirm shared-schema + `org_id` + **RLS**.
-2. 🔷 Customer portal: **Option 2** (global identity + workspace switcher). Not formally
-   locked, but §3's union query and §4 both assume it, and Q3/Q5 were decided on top of
-   it. Confirm or challenge — it is load-bearing either way.
+2. ✅ Identity scope: **per-firm accounts** (2026-08-26). `users` carries `org_id`;
+   email is unique per firm; no workspace switcher.
+   **Rejected: global identity + switcher.** It was the elegant model — a person is a
+   person — but it made the platform a controller of a cross-firm map of who is litigating
+   where, forced `users` to be the one table without `org_id` (the exception that
+   complicates every RLS policy), and required the identity/data plane split, an erasure
+   fan-out across controllers, a union query for the switcher, and a cross-firm
+   find-or-create with its account-enumeration surface. It bought an aggregate view for
+   the minority of people with matters at two firms at once. Per-firm is also the
+   **reversible** direction (see §4).
 3. ✅ Identity: **progressive**, in three states — anonymous (no `User`) → lead
    (`pending`) → activated (`active`). Decided 2026-08-20; see §5.
 4. ✅ Primary keys: **UUID everywhere** (decided 2026-08-13).
@@ -302,10 +337,12 @@ PHASE1's standalone `Lawyer` reference table is replaced: **lawyers are `User`s 
 ## 11. Entity map (high level)
 
 ```
-Organization (tenant) ──< Membership >── User (global identity)   insiders only
-Organization ──< Dossier (case) ── customer_user_id ──> User      the customer link
-                                                                  (full ER diagram with
-                                                                   columns: docs/schema.md)
+Organization (tenant) ──< User (org-scoped account; email unique per firm)
+                              │
+                              ├──< Membership (role)  insiders only — absence = outsider
+                              └──< Dossier.customer_user_id   the client link
+
+Organization ──< Dossier (case)                (full ER diagram: docs/schema.md)
 Dossier ── CaseType ── Jurisdiction            (reference data; global?)
 [later] Dossier ──< Assessment/Decision >, Engagement ──< Payment >
 [later] User ── LawyerProfile / StaffProfile

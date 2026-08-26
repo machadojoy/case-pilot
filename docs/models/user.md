@@ -1,28 +1,35 @@
-# Model: User (global identity)
+# Model: User (an account at one firm)
 
-> Status: **core locked (2026-08-21).** Resolves DESIGN.md §10 Q3 and Q5.
+> Status: **core locked (2026-08-21); rescoped by Q2 (2026-08-26).**
+> Q2 made accounts **per-firm** — this doc previously described a global identity plane.
+> Resolves DESIGN.md §10 Q2, Q3 and Q5.
 > See `../../DESIGN.md` §3 (identity) and §5 (progressive identity) for the big picture.
 
 ## Purpose
 
-The **identity plane**: one row per human, global, *never* org-scoped. One person is one
-`User` no matter how many firms they touch — an employee at firm A and a client of firms
-B and C is a single row with one `Membership` and two `Dossier`s.
+An account **at one firm**. `users` carries `org_id` like every other table (DESIGN.md
+§2); someone dealing with two firms has two unrelated rows, and nothing links them. That
+is what makes CasePilot a pure processor rather than the holder of a cross-firm map of who
+is litigating where (§2a).
 
-`User` deliberately holds almost nothing. Anything on this row is visible to **every**
-firm the person deals with, so it carries only what is needed to authenticate and
-address an account. Personal details live per-firm (see *Profile* below).
+**Superseded:** an earlier design made `User` a global identity plane outside tenancy,
+with a workspace switcher. See §10 Q2 for what that cost and why it lost.
+
+`User` still deliberately holds almost nothing — only what is needed to authenticate and
+address an account. Verified personal details are *attested* data belonging to the case,
+not the account (see *Profile* below).
 
 ## Fields (decided)
 
 | Field | Type | Notes |
 |-------|------|-------|
 | `id` | UUID | PK. **UUID everywhere.** |
-| `email` | str | **globally unique**, the identity anchor. Lowercased on write — `Joy@x.com` and `joy@x.com` are one mailbox, and without normalisation the lead flow's find-or-create silently forks the identity. **Do not** strip plus-addressing or dots: `joy+firmb@x.com` is a genuinely different mailbox, and using it to compartmentalise firms is reasonable. |
+| `org_id` | UUID | FK → `organizations.id`. The firm this account belongs to. Added by Q2. |
+| `email` | str | Unique **per firm** — `(org_id, lower(email))`, not globally. The same address at two firms is two unrelated accounts. The identity anchor within a workspace. Lowercased on write — `Joy@x.com` and `joy@x.com` are one mailbox, and without normalisation the lead flow's find-or-create silently forks the account. **Do not** strip plus-addressing or dots: `joy+firmb@x.com` is a genuinely different mailbox. |
 | `hashed_password` | str \| **None** | Null for leads — they have no credentials and cannot log in. pwdlib/bcrypt. |
 | `full_name` | str \| None | **Display only, unverified.** One field, not first/last: name structure varies enormously across cultures (mononyms, multiple family names, varying order) and splitting buys nothing we use. Null for leads, who arrive with an email and nothing else. The *verified* legal name is per-firm. |
-| `status` | str + CHECK | `pending` \| `active`. Stored as a **string with a CHECK constraint**, not a PG enum — see *Why not a native enum*. |
-| `email_verified_at` | datetime \| None | Proof of **mailbox control**. Global (unlike other verification) because it anchors account ownership rather than asserting a fact about the person. |
+| `status` | str + CHECK | `pending` \| `unverified` \| `active`. Stored as a **string with a CHECK constraint**, not a PG enum — see *Why not a native enum*. |
+| `email_verified_at` | datetime \| None | Proof of **mailbox control** — what makes the account usable, as opposed to attested facts *about* the person, which belong to the case. |
 | `sessions_valid_from` | datetime \| None | Reject any JWT whose `iat` is older than this. **Required by DESIGN.md §5** — see *Session invalidation*. |
 | `erased_at` | datetime \| None | Set when the identity is destroyed in place. See *Erasure*. |
 | `created_at` / `updated_at` | datetime (tz-aware) | Convention: both on every table. |
@@ -103,8 +110,10 @@ insert, one gets an `IntegrityError`. Same insert-and-catch discipline as
 existing row** rather than retrying with a new value. Inside `session.begin_nested()`, and
 the service still must not commit.
 
-Per DESIGN.md §4, the response must be **identical** whether the user already existed or
-not. Revealing "already exists" tells firm B their prospect is shopping around.
+The response must be **identical** whether the account already existed or not. Since Q2
+this is no longer about hiding that someone deals with *other* firms — there is no
+cross-firm link to leak — but a distinguishable response still lets anyone probe which
+addresses this firm holds, which for a law firm is a client list.
 
 ### A `pending` user must be unusable
 
@@ -166,45 +175,50 @@ link to the old cases, which is what erasure means.
 **Always tombstone, never hard-delete**, even for a user with no cases: a "do they have
 cases?" check races against a case being created, and one code path beats two.
 
-### Erasing the `User` does not erase the person
+### Erasing the account does not erase the case file
 
-Each firm is an independent controller of its own case file (DESIGN.md §2a). Firm A's
-attested record still holds her legal name, address and DOB, and firm A may be legally
-obliged to keep it. Her request goes to CasePilot for the account and to each firm
-separately for its file. **The FK must never cascade** — `ON DELETE CASCADE` from `users`
-to `dossiers` would let an identity-plane erasure destroy a firm's legal records.
-Tombstoning avoids this by construction.
+The firm is the controller of both (DESIGN.md §2a), and the two have different answers.
+The account can be anonymised on request; the `Dossier` often **must not** be — Art
+17(3)(b) protects retention for live legal claims, and the case file still holds her
+attested legal name, address and DOB.
+
+**The FK must never cascade.** `ON DELETE CASCADE` from `users` to `dossiers` would let an
+account erasure destroy records the firm is obliged to keep. Tombstoning avoids this by
+construction.
+
+Since Q2 the request no longer fans out across controllers — it goes to *that firm*, and
+another firm's copy of the same person is a separate matter that firm decides separately.
 
 ## Profile — deliberately not on this model
 
-"Profile" is two different things:
+Q2 simplified this. The old design had *two* profiles — a global self-asserted copy for
+prefill, and a per-firm attested snapshot — because one person spanned many firms. With
+per-firm accounts there is only one kind left:
 
-| | self-asserted | attested |
-|---|---|---|
-| scope | global, one per person | **per-firm** |
-| mutable | yes — she moves house | **no** — it is a snapshot |
-| authority | none; prefill only | the firm's diligence record |
+**Attested data belongs to the case, not the account.** Legal name, address, DOB and
+phone-as-contact-detail are facts a firm *verified*, with a reviewer and a date. They hang
+off `Dossier` initially, graduating to a `ClientProfile(org_id, user_id)` only if a person
+has several cases at one firm.
 
-If a firm's record of an address were a pointer to a mutable global field, then the day
-she moves house the firm's record of where she lived *at the time of filing* would
-silently change. The snapshot is the point. Conversely, retyping an address at every firm
-would hollow out §4's "one login, many workspaces" — so the self-asserted copy exists to
-be **copied into** a firm's scope on submission, never read across. (Same shape as
-"current shipping address" vs "the address this order shipped to".)
+The reason it is not on `users` even now that both are org-scoped: **the firm's record must
+be a snapshot.** If it pointed at a mutable account field, then the day she moves house the
+firm's record of where she lived *at the time of filing* would silently change. That is
+the whole point of holding it. (Same shape as "current shipping address" vs "the address
+this order shipped to" — the order does not join to the profile.)
 
-Per-firm attested data hangs off `Dossier` initially, graduating to a
-`ClientProfile(org_id, user_id)` only if a person has several cases at one firm. Not built
-now: nothing collects it yet.
+Not built now: nothing collects it yet.
 
 "Verified" is also two mechanisms, and one boolean would conflate them:
 
-| Kind | Proves | Lives |
+| Kind | Proves | Where |
 |------|--------|-------|
-| challenge-response (email link, SMS OTP) | control of a **channel** | `User` — global |
-| document attestation (passport, utility bill) | a **fact about the person** | per-firm, with reviewer + date |
+| challenge-response (email link, SMS OTP) | control of a **channel** | `users` — it is what makes the account usable |
+| document attestation (passport, utility bill) | a **fact about the person** | the case record, with reviewer + date |
 
-Which resolves phone: phone-as-login-channel is identity plane; phone-as-contact-detail is
-the firm's record. Often the same digits, genuinely different facts.
+Which resolves phone: phone-as-login-channel is an account credential;
+phone-as-contact-detail is attested case data. Often the same digits, genuinely different
+facts — and note the second does *not* transfer between firms even now that accounts are
+separate, because each firm did its own diligence.
 
 ## Deliberately NOT included yet (YAGNI)
 
@@ -228,7 +242,7 @@ the firm's record. Often the same digits, genuinely different facts.
   `ArchiveMixin` for hide-but-keep); one mixin doing both invites an "undelete" endpoint
   against rows whose contents no longer exist. Note `Membership` is the likely *counter*
   example: revocation should be a real `DELETE`, since a tombstone would occupy the
-  `(user, org)` unique slot forever and block re-adding someone who once left.
+  `user_id` unique slot forever and block re-adding someone who once left.
 
 ## To resolve when we build
 

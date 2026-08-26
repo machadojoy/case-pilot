@@ -13,22 +13,29 @@ decisions, the source of truth); **`CLAUDE.md`** = how we work (conventions, wor
 | | Question | State |
 |---|---|---|
 | Q1 | Isolation: shared schema + `org_id` + **RLS** | ❓ open — not urgent until multi-tenant reads exist |
-| Q2 | Customer portal: global identity + workspace switcher | 🔷 **assumed throughout** §3's union query, never formally locked |
+| Q2 | Identity scope: **per-firm accounts**, no switcher | ✅ 2026-08-26 — **reversed** the earlier global-identity model |
 | Q3 | Progressive identity (anonymous → lead → activated) | ✅ 2026-08-20 |
 | Q4 | UUID PKs everywhere | ✅ 2026-08-13 |
 | Q5 | Roles `owner/admin/lawyer/staff`; `customer` is not a role | ✅ 2026-08-20 |
 | Q6 | `Jurisdiction`/`CaseType`: global vs per-firm | ❓ open — blocks reference data, not auth |
 
-Also decided since, and easy to miss because they aren't numbered questions: **§2a** (each
-firm is its own data controller; never cascade from `users` to tenant data; Art 9 data is
-unavoidable here) and **§5's two mint paths** (firm staff sign up → `unverified`; clients
-are captured at intake → `pending`).
+Also decided, and easy to miss because they aren't numbered questions: **§2a** (every row
+belongs to one firm, so CasePilot is a **pure processor**; never cascade from `users` to
+`dossiers`; Art 9 data is unavoidable here), **§5's two mint paths** (firm staff sign up →
+`unverified`; clients are captured at intake → `pending`), and **§3's Teams direction**
+(`Membership` = what you *are*, `TeamMembership` = what you *do*; built with `Dossier`).
+
+> ⚠️ **Q2 reversed a decision the code already implements.** `users` is shipped *without*
+> `org_id` and with a globally-unique email index. Before any auth work: add `org_id`, and
+> replace `uq_users_email_lower` with a composite unique on `(org_id, lower(email))`. No
+> data exists, so it is a small migration — but autogenerate will not write the functional
+> index for you.
 
 ---
 
 ## Current status — updated 2026-08-26
 
-**Phase:** 1 (skeleton + models + auth). **The identity plane exists: `users` is a real
+**Phase:** 1 (skeleton + models + auth). **Accounts exist: `users` is a real
 table on Postgres.** Next model in the build order is `Membership` — which, unlike
 `User`, has no design doc yet, so the next step is *design*, not code.
 
@@ -42,7 +49,8 @@ GET  /api/v1/organizations/{id}     200 / 404
 ```
 
 Done 2026-08-26 (PR #14, merged to `main`):
-- **`User` model shipped** — the identity plane, nine columns, per `docs/models/user.md`.
+- **`User` model shipped** — nine columns, per `docs/models/user.md`. **Note:** shipped
+  before Q2, so it still lacks `org_id` and has a globally-unique email index.
   Table only: no router/service/schemas, because nothing can use them until `Membership`
   lands. `hashed_password` / `sessions_valid_from` / `email_verified_at` are nullable and
   unused for now; they're there because retrofitting them later costs more.
@@ -161,46 +169,56 @@ This **supersedes** PHASE1.md's flat data model (and its human-triage assumption
 
 ## Next up (the very next step)
 
-**Auth slice: `register` + `login` + `me`.** Decided 2026-08-26 — the order is *auth
-first, then `Membership`*. Full build spec in **`docs/auth.md`**; read it before starting.
+**Q2 landed 2026-08-26 and reshaped this.** Read `docs/auth.md` *and* the ⚠️ note above
+before starting. The slice is no longer "register + login + me" — it now has to carry
+`Membership` too, and the shipped `users` table needs a migration first.
 
-**`/users/me` cannot ship alone**, which is what settled the order: it needs a token →
-which needs login → which needs a password → and nothing in the system can currently give
-anyone one. Leads are minted `pending` with `hashed_password = None` by an intake flow
-that doesn't exist. Register, login and me are one slice or they are nothing.
+### Step 0 — migrate `users` for per-firm accounts
+
+Shipped `users` has no `org_id` and a **globally** unique email index. Q2 makes accounts
+per-firm, so:
+
+- add `org_id` (FK → `organizations.id`, not null);
+- drop `uq_users_email_lower`, add a composite unique on `(org_id, lower(email))`.
+
+No data exists, so it is small — but **autogenerate will not write a functional index**,
+so that part is hand-written, same as the CHECK constraints.
+
+### Then the slice itself 🔷 (scope change — wants sign-off)
 
 ```
-POST /api/v1/auth/register    firm-side signup -> `unverified`
-POST /api/v1/auth/login       -> JWT
-GET  /api/v1/users/me         the only global-plane user read
+POST /api/v1/auth/register    Organization + User(unverified) + Membership(owner), one txn
+POST /api/v1/auth/login       org_slug + email + password -> JWT carrying sub AND org_id
+GET  /api/v1/users/me         the caller's own row
 ```
 
-That forced a design decision, now recorded in DESIGN.md §5: **two populations, two mint
-paths.** `register` is the *firm-side* path (a firm owner buying the SaaS); customers are
-minted `pending` by intake. `pending` ≠ `unverified` — a lead's email was typed in by a
-third party, so it must prove mailbox control before holding a credential; a signup-first
-user already chose their own password.
+**Why `Membership` is now inside this slice:** an account needs an `org_id`, so the first
+user of a firm cannot exist before the firm does. Registration therefore *is* firm
+creation — which is exactly DESIGN.md's "creation is transactional": `Organization` +
+`User` + `Membership(owner)`, all-or-nothing. Shipping without `Membership` would leave
+every firm ownerless. `docs/auth.md` lays out the three options and why merging wins.
 
-Four ratified decisions, all detailed in `docs/auth.md`:
+This also closes both live problems at once: `POST /organizations` stops being an anonymous
+endpoint, and `GET /organizations` becomes scopeable.
 
-1. **Add `unverified` to `UserStatus`** — autogenerate produces an **empty migration**
-   for this (it sees neither enum-value nor CHECK changes). Hand-write the
-   drop/create-constraint, and prove it with `alembic upgrade head` + `\d users`;
-   `create_all` in the tests will not catch a missing constraint.
+Ratified decisions (detail in `docs/auth.md`):
+
+1. **Add `unverified` to `UserStatus`** — autogenerate emits a CHECK on `create_table` but
+   never sees a *change* to one, so this migration is hand-written. Prove it with
+   `alembic upgrade head` + `\d users`; `create_all` in the tests will not catch it.
 2. **Login eligibility:** anyone with a password who is not erased. `pending` is refused
    structurally (no password), not by a status check.
-3. **JWT** HS256, `sub`/`iat`/`exp`, secret from config — and wire the
-   `iat < sessions_valid_from` rejection *now*. The column exists for it; retrofitting an
-   auth check is how the pre-hijacking window gets left open.
+3. **JWT** HS256, `sub` + **`org_id`** + `iat`/`exp`, secret from config — and wire the
+   `iat < sessions_valid_from` rejection *now*, not later.
 4. **`GET /api/v1/users/me`**, not `/auth/me` (PHASE1.md is superseded).
 
-New module `app/auth/` for credentials/tokens; `/users/me` lives in `app/users/`.
+**The sharpest bug to avoid:** login must query
+`org_id = :org AND lower(email) = lower(:email)`. Dropping the `org_id` term would let a
+password from firm A authenticate against firm B's account with the same address.
 
 **Biggest deliberate cut:** no email sending, so no verification flow — nobody reaches
-`active` yet and `unverified` is the working state. Also out: refresh tokens, password
-reset, email change, rate limiting, and **authorization of any kind** (`POST
-/organizations` stays open; `GET /organizations` still lists every firm to everyone —
-both need `Membership`).
+`active` and `unverified` is the working state. Also out: invitations (so a firm stays a
+one-person workspace), refresh tokens, password reset, email change, rate limiting.
 
 **Needs the DB up:** `colima start` → `docker compose up -d`.
 

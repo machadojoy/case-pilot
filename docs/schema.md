@@ -19,7 +19,8 @@ erDiagram
 
     USERS {
         uuid id PK
-        text email UK "unique on lower(email)"
+        uuid org_id FK "the firm this account belongs to"
+        text email UK "unique per firm: (org_id, lower(email))"
         text hashed_password "NULL for leads"
         text full_name "display only, unverified"
         text status "CHECK: pending|unverified|active"
@@ -32,8 +33,7 @@ erDiagram
 
     MEMBERSHIPS {
         uuid id PK
-        uuid user_id FK
-        uuid org_id FK
+        uuid user_id FK "unique - org comes from the user"
         text role "CHECK: owner|admin|lawyer|staff"
         timestamptz created_at
         timestamptz updated_at
@@ -64,10 +64,10 @@ erDiagram
         text slug
     }
 
-    ORGANIZATIONS ||--o{ MEMBERSHIPS : "employs (insiders)"
-    USERS         ||--o{ MEMBERSHIPS : "works at"
+    ORGANIZATIONS ||--o{ USERS       : "owns every account"
+    USERS         ||--o| MEMBERSHIPS : "insider grant (absent = client)"
     ORGANIZATIONS ||--o{ DOSSIERS    : "owns the case file"
-    USERS         ||--o{ DOSSIERS    : "is the client of (outsider)"
+    USERS         ||--o{ DOSSIERS    : "is the client on"
     JURISDICTIONS ||--o{ CASE_TYPES  : "groups"
     CASE_TYPES    ||--o{ DOSSIERS    : "classifies"
 ```
@@ -84,17 +84,20 @@ erDiagram
 
 ## The one thing to read the diagram for
 
-**A `User` reaches an `Organization` by two different edges, and they are not
-interchangeable.** This is the single most important shape in the model (DESIGN.md §3):
+**Every account belongs to one firm, and within it, insiders and outsiders are different
+shapes** — not different permission levels (DESIGN.md §3):
 
-| Edge | Who | Scope predicate |
-|------|-----|-----------------|
-| via `MEMBERSHIPS` | **insider** — staff, lawyers | `WHERE org_id = :org` — the firm's whole book of business |
-| via `DOSSIERS.customer_user_id` | **outsider** — a client | `WHERE org_id = :org AND customer_user_id = :me` — their own case only |
+| Who | Marked by | Scope predicate |
+|-----|-----------|-----------------|
+| **insider** — staff, lawyers | a `MEMBERSHIPS` row | `WHERE org_id = :org` — the firm's whole book of business |
+| **outsider** — a client | **no** membership row | `WHERE org_id = :org AND customer_user_id = :me` — their own case only |
 
-No role check can express that second predicate, which is why `customer` is **not** a role
-and there is no customer `Membership` row. It also means the same person can be a `lawyer`
-at a firm *and* a client of it — one membership, one dossier, no conflict.
+No role check can express that second predicate, which is why `customer` is **not** a role.
+The same person can be a `lawyer` at a firm *and* a client of it — one membership, one
+dossier, no conflict.
+
+Since Q2 (per-firm accounts) the same human at two firms is **two unrelated `USERS` rows**.
+Nothing links them, which is what keeps CasePilot a pure processor.
 
 ## Conventions visible in the diagram
 
@@ -105,15 +108,15 @@ at a firm *and* a client of it — one membership, one dossier, no conflict.
   Postgres has no `ALTER TYPE ... DROP VALUE`, and these sets are still churning. The
   CHECK is generated from a Python `StrEnum` so there's one source of truth. Note
   **Alembic autogenerate cannot see CHECK changes** — those migrations are hand-written.
-- **`org_id` on every tenant-scoped row** (§2). `users` has none: it is the identity plane,
-  global by design.
+- **`org_id` on every table, no exceptions** (§2) — `users` included, since Q2. That
+  uniformity is what makes RLS one policy shape instead of a special case.
 
 ## Deletion behaviour — not symmetric, on purpose
 
 | Row | On "delete" |
 |-----|-------------|
 | `users` | **never deleted.** Erasure anonymises in place (`erased_at`); the row survives as an FK anchor for case files. |
-| `memberships` | **hard `DELETE`.** An access grant, not a record. A tombstone would occupy the `(user_id, org_id)` unique slot and block re-adding someone who left. |
+| `memberships` | **hard `DELETE`.** An access grant, not a record. A tombstone would occupy the `user_id` unique slot and block re-adding someone who left. |
 | `organizations` | **no `DELETE` endpoint at all.** Deleting a tenant would destroy `dossiers` the firm is legally obliged to keep. The real operation is *closure* — lifecycle, a future `status` value. |
 | `dossiers` | legal records; retention is the firm's obligation (§2a). |
 

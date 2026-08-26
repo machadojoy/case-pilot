@@ -1,6 +1,8 @@
 # Model: Membership (who works at which firm)
 
-> Status: **designed 2026-08-26, not built.** Central question locked by DESIGN.md §10 Q5.
+> Status: **designed 2026-08-26, not built. Rescoped the same day by Q2** (per-firm
+> accounts), which makes this table near-degenerate — see *After Q2* below, and challenge
+> it. Central question locked by DESIGN.md §10 Q5.
 > See `../../DESIGN.md` §3 (identity, and the Teams direction) and `../schema.md`.
 
 ## Purpose
@@ -17,13 +19,33 @@ person can be a `lawyer` at one firm and an `admin` at another.
 |-------|------|-------|
 | `id` | UUID | PK. **UUID everywhere.** |
 | `user_id` | UUID | FK → `users.id`. **Never `ON DELETE CASCADE`** (see *Erasure*). |
-| `org_id` | UUID | FK → `organizations.id`. |
 | `role` | str + CHECK | `owner` \| `admin` \| `lawyer` \| `staff`. |
 | `created_at` / `updated_at` | datetime (tz-aware) | Convention: both on every table. |
 
-**Unique on `(user_id, org_id)`** — one role per person per firm.
+**Unique on `user_id`** — one role per account, and an account belongs to one firm.
+
+**No `org_id`**, since Q2: `users.org_id` already says which firm, and duplicating it here
+would create a second source of truth that can disagree. (Pre-Q2 this table was the *only*
+thing tying a person to a firm, and carried `org_id` for that reason.)
 
 Nothing else. No `invited_by`, no `status`, no `joined_at` (that is `created_at`).
+
+## After Q2 — why this table still exists 🔷
+
+With `org_id` on `users`, a `Membership` is `(user_id, role)` unique on `user_id`: one
+meaningful column, 1:1 with an account. **That is a column pretending to be a table, and it
+is a fair thing to challenge.** Recorded here as a recommendation, not a settled fact.
+
+The case for keeping it: the insider/outsider boundary is the most security-sensitive line
+in the system. A row that *exists or doesn't* cannot be forgotten the way a nullable value
+can, and collapsing to `users.role IS NULL` defines a client by the absence of a *value*
+rather than the absence of a *grant* — which invites someone later to "tidy up" by adding
+`customer` as a role value, reintroducing exactly what Q5 rejected.
+
+The case against: SQL NULL semantics already fail closed (`role IN (...)` excludes NULL),
+the join costs a query, and one fewer table is one fewer thing. **If a reviewer prefers the
+collapse, argue with the reasoning above** — not with inertia from the pre-Q2 design, where
+this table was load-bearing for a different reason.
 
 ### `role` gets the same treatment as `User.status`
 
@@ -70,8 +92,8 @@ Small as it is, this buys three things immediately:
 1. org creation grants its creator ownership (DESIGN.md: creation is transactional —
    `Organization` + `User` + `Membership(owner)`, all-or-nothing);
 2. `POST /organizations` becomes authorizable;
-3. `GET /organizations` gets scoped to firms you belong to — **closing a live leak**,
-   since today it returns every firm in the system to anyone.
+3. `GET /organizations` gets scoped — **closing a live leak**, since today it returns
+   every firm in the system to anyone, unauthenticated.
 
 ## Rules to enforce when the endpoints exist
 
@@ -87,7 +109,7 @@ erasure endpoint — so they are recorded now and enforced when each lands.
   escalation.
 - **Revocation is a hard `DELETE`, never a tombstone.** This is the deliberate
   counter-example to `User`'s erasure (`user.md`): a tombstoned membership would occupy the
-  `(user_id, org_id)` unique slot forever and block re-adding someone who once left. If the
+  `user_id` unique slot forever and block re-adding someone who once left. If the
   firm wants history, that is an audit log — a different table with different retention.
 
 ## Erasure: memberships go, case files stay
@@ -95,13 +117,13 @@ erasure endpoint — so they are recorded now and enforced when each lands.
 Erasing a `User` **deletes their memberships**. A tombstone holding a live membership is a
 ghost employee with access.
 
-This looks like it violates DESIGN.md §2a's "never cascade from `users` to tenant data",
-and it does not — the distinction is worth stating because it will look wrong otherwise:
+The distinction that makes this safe is worth stating, because deleting *anything* on
+erasure will look wrong next to `Dossier` surviving:
 
 | | what it is | on erasure |
 |---|---|---|
 | `Membership` | an **access grant** | deleted — nobody is obliged to retain it |
-| `Dossier` | a **legal record**, retention governed by the firm | survives |
+| `Dossier` | a **legal record**, retention obligation on the firm | survives |
 
 Grants go, records stay. The FK still must not be `ON DELETE CASCADE`: the deletion is a
 deliberate step in the erasure routine, not a side effect of touching the `users` row.
@@ -112,8 +134,8 @@ DESIGN.md §3 records `Team` / `TeamMembership` as the decided direction, built 
 `Dossier`. It is a **second axis**, not a replacement — a team lead is
 `Membership(role=lawyer)` **+** `TeamMembership(role=lead)`.
 
-So: do not add `lead` to this role enum, and do not drop the `(user_id, org_id)` unique
-constraint in anticipation. Both stay correct under the team model.
+So: do not add `lead` to this role enum, and do not drop the `user_id` unique constraint
+in anticipation. Both stay correct under the team model.
 
 ## Deliberately NOT included yet (YAGNI)
 
