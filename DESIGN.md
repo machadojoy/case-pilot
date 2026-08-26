@@ -257,6 +257,8 @@ PHASE1's standalone `Lawyer` reference table is replaced: **lawyers are `User`s 
 ```
 Organization (tenant) ──< Membership >── User (global identity)   insiders only
 Organization ──< Dossier (case) ── customer_user_id ──> User      the customer link
+                                                                  (full ER diagram with
+                                                                   columns: docs/schema.md)
 Dossier ── CaseType ── Jurisdiction            (reference data; global?)
 [later] Dossier ──< Assessment/Decision >, Engagement ──< Payment >
 [later] User ── LawyerProfile / StaffProfile

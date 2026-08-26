@@ -4,6 +4,7 @@
 
 Where everything else lives: **`DESIGN.md`** = what we're building and why (domain
 decisions, the source of truth); **`CLAUDE.md`** = how we work (conventions, workflow);
+**`docs/schema.md`** = the ER diagram, every table and column;
 **`docs/models/*.md`** + **`docs/auth.md`** = per-slice detail with reasoning;
 **`PHASE1.md`** = the original brief, **historical and superseded** — background only.
 
